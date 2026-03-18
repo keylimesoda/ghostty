@@ -14,6 +14,9 @@ const RenderStateWrapper = struct {
 /// C: GhosttyRenderState
 pub const RenderState = ?*RenderStateWrapper;
 
+/// C: GhosttyRenderStateDirty
+pub const Dirty = renderpkg.RenderState.Dirty;
+
 pub fn new(
     alloc_: ?*const CAllocator,
     result: *RenderState,
@@ -44,6 +47,26 @@ pub fn update(
     const t = terminal_ orelse return .invalid_value;
 
     state.state.update(state.alloc, t) catch return .out_of_memory;
+    return .success;
+}
+
+pub fn dirty_get(
+    state_: RenderState,
+    out_dirty: *Dirty,
+) callconv(.c) Result {
+    const state = state_ orelse return .invalid_value;
+    out_dirty.* = state.state.dirty;
+    return .success;
+}
+
+pub fn dirty_set(
+    state_: RenderState,
+    dirty_: c_int,
+) callconv(.c) Result {
+    const state = state_ orelse return .invalid_value;
+    const dirty = std.meta.intToEnum(Dirty, dirty_) catch
+        return .invalid_value;
+    state.state.dirty = dirty;
     return .success;
 }
 
@@ -78,6 +101,60 @@ test "render: update invalid value" {
 
     try testing.expectEqual(Result.invalid_value, update(null, null));
     try testing.expectEqual(Result.invalid_value, update(state, null));
+}
+
+test "render: dirty get/set invalid value" {
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    var dirty: Dirty = .false;
+    try testing.expectEqual(Result.invalid_value, dirty_get(null, &dirty));
+    try testing.expectEqual(Result.invalid_value, dirty_set(
+        null,
+        @intFromEnum(Dirty.full),
+    ));
+}
+
+test "render: dirty get/set" {
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    var dirty: Dirty = undefined;
+    try testing.expectEqual(Result.success, dirty_get(state, &dirty));
+    try testing.expectEqual(Dirty.false, dirty);
+
+    try testing.expectEqual(Result.success, dirty_set(
+        state,
+        @intFromEnum(Dirty.partial),
+    ));
+    try testing.expectEqual(Result.success, dirty_get(state, &dirty));
+    try testing.expectEqual(Dirty.partial, dirty);
+
+    try testing.expectEqual(Result.success, dirty_set(
+        state,
+        @intFromEnum(Dirty.full),
+    ));
+    try testing.expectEqual(Result.success, dirty_get(state, &dirty));
+    try testing.expectEqual(Dirty.full, dirty);
+}
+
+test "render: dirty set invalid enum value" {
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.invalid_value, dirty_set(state, 99));
 }
 
 test "render: update" {

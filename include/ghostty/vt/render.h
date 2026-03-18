@@ -50,6 +50,22 @@ extern "C" {
 typedef struct GhosttyRenderState* GhosttyRenderState;
 
 /**
+ * Dirty state of a render state after update.
+ *
+ * @ingroup render
+ */
+typedef enum {
+  /** Not dirty at all; rendering can be skipped. */
+  GHOSTTY_RENDER_STATE_DIRTY_FALSE = 0,
+
+  /** Some rows changed; renderer can redraw incrementally. */
+  GHOSTTY_RENDER_STATE_DIRTY_PARTIAL = 1,
+
+  /** Global state changed; renderer should redraw everything. */
+  GHOSTTY_RENDER_STATE_DIRTY_FULL = 2,
+} GhosttyRenderStateDirty;
+
+/**
  * Create a new render state instance.
  *
  * @param allocator Pointer to allocator, or NULL to use the default allocator
@@ -78,6 +94,34 @@ GhosttyResult ghostty_render_state_new(const GhosttyAllocator* allocator,
  */
 GhosttyResult ghostty_render_state_update(GhosttyRenderState state,
                                           GhosttyTerminal terminal);
+
+/**
+ * Get the current dirty state of a render state.
+ *
+ * @param state The render state handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param[out] out_dirty On success, receives the current dirty state
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if `state` is
+ *         NULL
+ *
+ * @ingroup render
+ */
+GhosttyResult ghostty_render_state_dirty_get(GhosttyRenderState state,
+                                             GhosttyRenderStateDirty* out_dirty);
+
+/**
+ * Set the dirty state of a render state.
+ *
+ * This can be used by callers to clear dirty state after handling updates.
+ *
+ * @param state The render state handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param dirty The dirty state to set
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if `state` is
+ *         NULL or `dirty` is not a recognized enum value
+ *
+ * @ingroup render
+ */
+GhosttyResult ghostty_render_state_dirty_set(GhosttyRenderState state,
+                                             GhosttyRenderStateDirty dirty);
 
 /**
  * Free a render state instance.
