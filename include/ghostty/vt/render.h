@@ -96,6 +96,24 @@ GhosttyResult ghostty_render_state_update(GhosttyRenderState state,
                                           GhosttyTerminal terminal);
 
 /**
+ * Get the current viewport size from a render state.
+ *
+ * The returned values are the render-state dimensions in cells. These
+ * match the active viewport size from the most recent successful update.
+ *
+ * @param state The render state handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param[out] out_cols On success, receives the viewport width in cells
+ * @param[out] out_rows On success, receives the viewport height in cells
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if `state`,
+ *         `out_cols`, or `out_rows` is NULL
+ *
+ * @ingroup render
+ */
+GhosttyResult ghostty_render_state_size_get(GhosttyRenderState state,
+                                            uint16_t* out_cols,
+                                            uint16_t* out_rows);
+
+/**
  * Get the current dirty state of a render state.
  *
  * @param state The render state handle (NULL returns GHOSTTY_INVALID_VALUE)

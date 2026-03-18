@@ -36,6 +36,7 @@ pub const formatter_free = formatter.free;
 pub const render_state_new = render.new;
 pub const render_state_free = render.free;
 pub const render_state_update = render.update;
+pub const render_state_size_get = render.size_get;
 pub const render_state_dirty_get = render.dirty_get;
 pub const render_state_dirty_set = render.dirty_set;
 

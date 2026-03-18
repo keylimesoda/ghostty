@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const lib_alloc = @import("../../lib/allocator.zig");
 const CAllocator = lib_alloc.Allocator;
+const size = @import("../size.zig");
 const terminal_c = @import("terminal.zig");
 const renderpkg = @import("../render.zig");
 const Result = @import("result.zig").Result;
@@ -47,6 +48,20 @@ pub fn update(
     const t = terminal_ orelse return .invalid_value;
 
     state.state.update(state.alloc, t) catch return .out_of_memory;
+    return .success;
+}
+
+pub fn size_get(
+    state_: RenderState,
+    out_cols_: ?*size.CellCountInt,
+    out_rows_: ?*size.CellCountInt,
+) callconv(.c) Result {
+    const state = state_ orelse return .invalid_value;
+    const out_cols = out_cols_ orelse return .invalid_value;
+    const out_rows = out_rows_ orelse return .invalid_value;
+
+    out_cols.* = state.state.cols;
+    out_rows.* = state.state.rows;
     return .success;
 }
 
@@ -101,6 +116,33 @@ test "render: update invalid value" {
 
     try testing.expectEqual(Result.invalid_value, update(null, null));
     try testing.expectEqual(Result.invalid_value, update(state, null));
+}
+
+test "render: size get invalid value" {
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    var cols: size.CellCountInt = 0;
+    var rows: size.CellCountInt = 0;
+    try testing.expectEqual(Result.invalid_value, size_get(
+        null,
+        &cols,
+        &rows,
+    ));
+    try testing.expectEqual(Result.invalid_value, size_get(
+        state,
+        null,
+        &rows,
+    ));
+    try testing.expectEqual(Result.invalid_value, size_get(
+        state,
+        &cols,
+        null,
+    ));
 }
 
 test "render: dirty get/set invalid value" {
@@ -181,4 +223,14 @@ test "render: update" {
 
     terminal_c.vt_write(terminal, "hello", 5);
     try testing.expectEqual(Result.success, update(state, terminal));
+
+    var cols: size.CellCountInt = 0;
+    var rows: size.CellCountInt = 0;
+    try testing.expectEqual(Result.success, size_get(
+        state,
+        &cols,
+        &rows,
+    ));
+    try testing.expectEqual(@as(size.CellCountInt, 80), cols);
+    try testing.expectEqual(@as(size.CellCountInt, 24), rows);
 }
