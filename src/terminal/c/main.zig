@@ -3,6 +3,7 @@ pub const focus = @import("focus.zig");
 pub const formatter = @import("formatter.zig");
 pub const modes = @import("modes.zig");
 pub const osc = @import("osc.zig");
+pub const render = @import("render.zig");
 pub const key_event = @import("key_event.zig");
 pub const key_encode = @import("key_encode.zig");
 pub const mouse_event = @import("mouse_event.zig");
@@ -31,6 +32,10 @@ pub const formatter_terminal_new = formatter.terminal_new;
 pub const formatter_format_buf = formatter.format_buf;
 pub const formatter_format_alloc = formatter.format_alloc;
 pub const formatter_free = formatter.free;
+
+pub const render_state_new = render.new;
+pub const render_state_free = render.free;
+pub const render_state_update = render.update;
 
 pub const sgr_new = sgr.new;
 pub const sgr_free = sgr.free;
@@ -105,6 +110,7 @@ test {
     _ = formatter;
     _ = modes;
     _ = osc;
+    _ = render;
     _ = key_event;
     _ = key_encode;
     _ = mouse_event;

@@ -183,6 +183,9 @@ comptime {
         @export(&c.formatter_format_buf, .{ .name = "ghostty_formatter_format_buf" });
         @export(&c.formatter_format_alloc, .{ .name = "ghostty_formatter_format_alloc" });
         @export(&c.formatter_free, .{ .name = "ghostty_formatter_free" });
+        @export(&c.render_state_new, .{ .name = "ghostty_render_state_new" });
+        @export(&c.render_state_update, .{ .name = "ghostty_render_state_update" });
+        @export(&c.render_state_free, .{ .name = "ghostty_render_state_free" });
         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
         @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });

@@ -29,6 +29,7 @@
  *
  * The API is organized into the following groups:
  * - @ref terminal "Terminal" - Complete terminal emulator state and rendering
+ * - @ref render "Render State" - Incremental render state updates for custom renderers
  * - @ref formatter "Formatter" - Format terminal content as plain text, VT sequences, or HTML
  * - @ref osc "OSC Parser" - Parse OSC (Operating System Command) sequences
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences
@@ -95,6 +96,7 @@ extern "C" {
 #include <ghostty/vt/allocator.h>
 #include <ghostty/vt/focus.h>
 #include <ghostty/vt/formatter.h>
+#include <ghostty/vt/render.h>
 #include <ghostty/vt/terminal.h>
 #include <ghostty/vt/osc.h>
 #include <ghostty/vt/sgr.h>

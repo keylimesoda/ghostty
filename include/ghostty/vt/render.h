@@ -1,0 +1,100 @@
+/**
+ * @file render.h
+ *
+ * Render state for creating high performance renderers.
+ */
+
+#ifndef GHOSTTY_VT_RENDER_H
+#define GHOSTTY_VT_RENDER_H
+
+#include <ghostty/vt/allocator.h>
+#include <ghostty/vt/terminal.h>
+#include <ghostty/vt/types.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/** @defgroup render Render State
+ *
+ * Represents the state required to render a visible screen (a viewport)
+ * of a terminal instance. This is stateful and optimized for repeated
+ * updates from a single terminal instance and only updating dirty regions
+ * of the screen.
+ *
+ * The key design principle of this API is that it only needs read/write
+ * access to the terminal instance during the update call. This allows
+ * the render state to minimally impact terminal IO performance and also
+ * allows the renderer to be safely multi-threaded (as long as a lock is 
+ * held during the update call to ensure exclusive access to the terminal 
+ * instance).
+ *
+ * The basic usage of this API is:
+ *
+ *   1. Create an empty render state
+ *   2. Update it from a terminal instance whenever you need.
+ *   3. Read from the render state to get the data needed to draw your frame.
+ *
+ * ## Example
+ *
+ * @snippet c-vt-render/src/main.c render-state-update
+ *
+ * @{
+ */
+
+/**
+ * Opaque handle to a render state instance.
+ *
+ * @ingroup render
+ */
+typedef struct GhosttyRenderState* GhosttyRenderState;
+
+/**
+ * Create a new render state instance.
+ *
+ * @param allocator Pointer to allocator, or NULL to use the default allocator
+ * @param state Pointer to store the created render state handle
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_MEMORY on allocation
+ * failure
+ *
+ * @ingroup render
+ */
+GhosttyResult ghostty_render_state_new(const GhosttyAllocator* allocator,
+                                       GhosttyRenderState* state);
+
+/**
+ * Update a render state instance from a terminal.
+ *
+ * This consumes terminal/screen dirty state in the same way as the internal
+ * render state update path.
+ *
+ * @param state The render state handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param terminal The terminal handle to read from (NULL returns GHOSTTY_INVALID_VALUE)
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if `state` or
+ * `terminal` is NULL, GHOSTTY_OUT_OF_MEMORY if updating the state requires
+ * allocation and that allocation fails
+ *
+ * @ingroup render
+ */
+GhosttyResult ghostty_render_state_update(GhosttyRenderState state,
+                                          GhosttyTerminal terminal);
+
+/**
+ * Free a render state instance.
+ *
+ * Releases all resources associated with the render state. After this call,
+ * the render state handle becomes invalid.
+ *
+ * @param state The render state handle to free (may be NULL)
+ *
+ * @ingroup render
+ */
+void ghostty_render_state_free(GhosttyRenderState state);
+
+/** @} */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* GHOSTTY_VT_RENDER_H */
