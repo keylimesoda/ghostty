@@ -8,6 +8,7 @@
 #define GHOSTTY_VT_RENDER_H
 
 #include <ghostty/vt/allocator.h>
+#include <ghostty/vt/color.h>
 #include <ghostty/vt/terminal.h>
 #include <ghostty/vt/types.h>
 
@@ -66,6 +67,45 @@ typedef enum {
 } GhosttyRenderStateDirty;
 
 /**
+ * Render-state color information.
+ *
+ * This struct uses the sized-struct ABI pattern. Initialize with
+ * GHOSTTY_INIT_SIZED(GhosttyRenderStateColors) before calling
+ * ghostty_render_state_colors_get().
+ *
+ * Example:
+ * @code
+ * GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
+ * GhosttyResult result = ghostty_render_state_colors_get(state, &colors);
+ * @endcode
+ *
+ * @ingroup render
+ */
+typedef struct {
+  /** Size of this struct in bytes. Must be set to sizeof(GhosttyRenderStateColors). */
+  size_t size;
+
+  /** The default/current background color for the render state. */
+  GhosttyColorRgb background;
+
+  /** The default/current foreground color for the render state. */
+  GhosttyColorRgb foreground;
+
+  /** The cursor color when explicitly set by terminal state. */
+  GhosttyColorRgb cursor;
+
+  /** 
+   * True when cursor contains a valid explicit cursor color value. 
+   * If this is false, the cursor color should be ignored; it will 
+   * contain undefined data.
+   * */
+  bool cursor_has_value;
+
+  /** The active 256-color palette for this render state. */
+  GhosttyColorRgb palette[256];
+} GhosttyRenderStateColors;
+
+/**
  * Create a new render state instance.
  *
  * @param allocator Pointer to allocator, or NULL to use the default allocator
@@ -112,6 +152,24 @@ GhosttyResult ghostty_render_state_update(GhosttyRenderState state,
 GhosttyResult ghostty_render_state_size_get(GhosttyRenderState state,
                                             uint16_t* out_cols,
                                             uint16_t* out_rows);
+
+/**
+ * Get the current color information from a render state.
+ *
+ * This writes as many fields as fit in the caller-provided sized struct.
+ * `out_colors->size` must be set by the caller (typically via
+ * GHOSTTY_INIT_SIZED(GhosttyRenderStateColors)).
+ *
+ * @param state The render state handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param[out] out_colors Sized output struct to receive render-state colors
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if `state` or
+ *         `out_colors` is NULL, or if `out_colors->size` is smaller than
+ *         `sizeof(size_t)`
+ *
+ * @ingroup render
+ */
+GhosttyResult ghostty_render_state_colors_get(GhosttyRenderState state,
+                                              GhosttyRenderStateColors* out_colors);
 
 /**
  * Get the current dirty state of a render state.

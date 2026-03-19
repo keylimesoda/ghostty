@@ -1,7 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
+const lib = @import("../../lib/main.zig");
 const lib_alloc = @import("../../lib/allocator.zig");
 const CAllocator = lib_alloc.Allocator;
+const colorpkg = @import("../color.zig");
 const size = @import("../size.zig");
 const terminal_c = @import("terminal.zig");
 const renderpkg = @import("../render.zig");
@@ -17,6 +19,16 @@ pub const RenderState = ?*RenderStateWrapper;
 
 /// C: GhosttyRenderStateDirty
 pub const Dirty = renderpkg.RenderState.Dirty;
+
+/// C: GhosttyRenderStateColors
+pub const Colors = extern struct {
+    size: usize = @sizeOf(Colors),
+    background: colorpkg.RGB.C,
+    foreground: colorpkg.RGB.C,
+    cursor: colorpkg.RGB.C,
+    cursor_has_value: bool,
+    palette: [256]colorpkg.RGB.C,
+};
 
 pub fn new(
     alloc_: ?*const CAllocator,
@@ -62,6 +74,68 @@ pub fn size_get(
 
     out_cols.* = state.state.cols;
     out_rows.* = state.state.rows;
+    return .success;
+}
+
+pub fn colors_get(
+    state_: RenderState,
+    out_colors_: ?*Colors,
+) callconv(.c) Result {
+    const state = state_ orelse return .invalid_value;
+    const out_colors = out_colors_ orelse return .invalid_value;
+    const out_size = out_colors.size;
+    if (out_size < @sizeOf(usize)) return .invalid_value;
+
+    const colors = state.state.colors;
+    if (lib.structSizedFieldFits(
+        Colors,
+        out_size,
+        "background",
+    )) {
+        out_colors.background = colors.background.cval();
+    }
+
+    if (lib.structSizedFieldFits(
+        Colors,
+        out_size,
+        "foreground",
+    )) {
+        out_colors.foreground = colors.foreground.cval();
+    }
+
+    if (colors.cursor) |cursor| {
+        if (lib.structSizedFieldFits(
+            Colors,
+            out_size,
+            "cursor",
+        )) {
+            out_colors.cursor = cursor.cval();
+        }
+    }
+
+    if (lib.structSizedFieldFits(
+        Colors,
+        out_size,
+        "cursor_has_value",
+    )) {
+        out_colors.cursor_has_value = colors.cursor != null;
+    }
+
+    if (lib.structSizedFieldFits(
+        Colors,
+        out_size,
+        "palette",
+    )) {
+        const palette_offset = @offsetOf(Colors, "palette");
+        if (out_size > palette_offset) {
+            const available = out_size - palette_offset;
+            const max_entries = @min(colors.palette.len, available / @sizeOf(colorpkg.RGB.C));
+            for (0..max_entries) |i| {
+                out_colors.palette[i] = colors.palette[i].cval();
+            }
+        }
+    }
+
     return .success;
 }
 
@@ -143,6 +217,24 @@ test "render: size get invalid value" {
         &cols,
         null,
     ));
+}
+
+test "render: colors get invalid value" {
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    var colors: Colors = std.mem.zeroes(Colors);
+    colors.size = @sizeOf(Colors);
+
+    try testing.expectEqual(Result.invalid_value, colors_get(null, &colors));
+    try testing.expectEqual(Result.invalid_value, colors_get(state, null));
+
+    colors.size = @sizeOf(usize) - 1;
+    try testing.expectEqual(Result.invalid_value, colors_get(state, &colors));
 }
 
 test "render: dirty get/set invalid value" {
@@ -233,4 +325,81 @@ test "render: update" {
     ));
     try testing.expectEqual(@as(size.CellCountInt, 80), cols);
     try testing.expectEqual(@as(size.CellCountInt, 24), rows);
+}
+
+test "render: colors get" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib_alloc.test_allocator,
+        &terminal,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer terminal_c.free(terminal);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    var colors: Colors = std.mem.zeroes(Colors);
+    colors.size = @sizeOf(Colors);
+    try testing.expectEqual(Result.success, colors_get(state, &colors));
+
+    const state_colors = &state.?.state.colors;
+    try testing.expectEqual(state_colors.background.cval(), colors.background);
+    try testing.expectEqual(state_colors.foreground.cval(), colors.foreground);
+
+    if (state_colors.cursor) |cursor| {
+        try testing.expect(colors.cursor_has_value);
+        try testing.expectEqual(cursor.cval(), colors.cursor);
+    } else {
+        try testing.expect(!colors.cursor_has_value);
+    }
+
+    for (state_colors.palette, colors.palette) |expected, actual| {
+        try testing.expectEqual(expected.cval(), actual);
+    }
+}
+
+test "render: colors get supports truncated sized struct" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib_alloc.test_allocator,
+        &terminal,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer terminal_c.free(terminal);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    var colors: Colors = std.mem.zeroes(Colors);
+    const sentinel: colorpkg.RGB.C = .{ .r = 0xAA, .g = 0xBB, .b = 0xCC };
+    for (&colors.palette) |*entry| entry.* = sentinel;
+
+    colors.size = @offsetOf(Colors, "palette") + @sizeOf(colorpkg.RGB.C) * 2;
+    try testing.expectEqual(Result.success, colors_get(state, &colors));
+
+    const state_colors = &state.?.state.colors;
+    try testing.expectEqual(state_colors.palette[0].cval(), colors.palette[0]);
+    try testing.expectEqual(state_colors.palette[1].cval(), colors.palette[1]);
+    try testing.expectEqual(sentinel, colors.palette[2]);
 }
