@@ -1,9 +1,11 @@
 const std = @import("std");
 const testing = std.testing;
+const Allocator = std.mem.Allocator;
 const lib = @import("../../lib/main.zig");
 const lib_alloc = @import("../../lib/allocator.zig");
 const CAllocator = lib_alloc.Allocator;
 const colorpkg = @import("../color.zig");
+const page = @import("../page.zig");
 const size = @import("../size.zig");
 const terminal_c = @import("terminal.zig");
 const renderpkg = @import("../render.zig");
@@ -14,8 +16,23 @@ const RenderStateWrapper = struct {
     state: renderpkg.RenderState = .empty,
 };
 
+const RowIteratorWrapper = struct {
+    alloc: std.mem.Allocator,
+
+    /// The current index (also y value) into the row list.
+    y: size.CellCountInt,
+
+    /// These are the raw pointers into the render state data.
+    raws: []const page.Row,
+    cells: []const std.MultiArrayList(renderpkg.RenderState.Cell),
+    dirty: []const bool,
+};
+
 /// C: GhosttyRenderState
 pub const RenderState = ?*RenderStateWrapper;
+
+/// C: GhosttyRenderStateRowIterator
+pub const RowIterator = ?*RowIteratorWrapper;
 
 /// C: GhosttyRenderStateDirty
 pub const Dirty = renderpkg.RenderState.Dirty;
@@ -159,6 +176,53 @@ pub fn dirty_set(
     return .success;
 }
 
+pub fn row_iterator_new(
+    alloc_: ?*const CAllocator,
+    state_: RenderState,
+    out_iterator_: ?*RowIterator,
+) callconv(.c) Result {
+    const state = state_ orelse return .invalid_value;
+    const out_iterator = out_iterator_ orelse return .invalid_value;
+    const alloc = lib_alloc.default(alloc_);
+
+    out_iterator.* = row_iterator_new_(
+        alloc,
+        state,
+    ) catch |err| {
+        out_iterator.* = null;
+        switch (err) {
+            error.OutOfMemory => return .out_of_memory,
+        }
+    };
+
+    return .success;
+}
+
+fn row_iterator_new_(
+    alloc: Allocator,
+    state: *RenderStateWrapper,
+) !*RowIteratorWrapper {
+    const it = try alloc.create(RowIteratorWrapper);
+    errdefer alloc.destroy(it);
+
+    const row_data = state.state.row_data.slice();
+    it.* = .{
+        .alloc = alloc,
+        .y = 0,
+        .raws = row_data.items(.raw),
+        .cells = row_data.items(.cells),
+        .dirty = row_data.items(.dirty),
+    };
+
+    return it;
+}
+
+pub fn row_iterator_free(iterator_: RowIterator) callconv(.c) void {
+    const iterator = iterator_ orelse return;
+    const alloc = iterator.alloc;
+    alloc.destroy(iterator);
+}
+
 pub fn free(state_: RenderState) callconv(.c) void {
     const state = state_ orelse return;
     const alloc = state.alloc;
@@ -289,6 +353,71 @@ test "render: dirty set invalid enum value" {
     defer free(state);
 
     try testing.expectEqual(Result.invalid_value, dirty_set(state, 99));
+}
+
+test "render: row iterator new invalid value" {
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    var iterator: RowIterator = null;
+    try testing.expectEqual(Result.invalid_value, row_iterator_new(
+        &lib_alloc.test_allocator,
+        null,
+        &iterator,
+    ));
+    try testing.expectEqual(Result.invalid_value, row_iterator_new(
+        &lib_alloc.test_allocator,
+        state,
+        null,
+    ));
+}
+
+test "render: row iterator new/free" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib_alloc.test_allocator,
+        &terminal,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer terminal_c.free(terminal);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    var iterator: RowIterator = null;
+    try testing.expectEqual(Result.success, row_iterator_new(
+        &lib_alloc.test_allocator,
+        state,
+        &iterator,
+    ));
+    defer row_iterator_free(iterator);
+
+    try testing.expect(iterator != null);
+    const iterator_ptr = iterator.?;
+    const row_data = state.?.state.row_data.slice();
+
+    try testing.expectEqual(@as(size.CellCountInt, 0), iterator_ptr.y);
+    try testing.expectEqual(row_data.items(.raw).len, iterator_ptr.raws.len);
+    try testing.expectEqual(row_data.items(.cells).len, iterator_ptr.cells.len);
+    try testing.expectEqual(row_data.items(.dirty).len, iterator_ptr.dirty.len);
+}
+
+test "render: row iterator free null" {
+    row_iterator_free(null);
 }
 
 test "render: update" {

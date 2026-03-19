@@ -7,6 +7,9 @@
 #ifndef GHOSTTY_VT_RENDER_H
 #define GHOSTTY_VT_RENDER_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <ghostty/vt/allocator.h>
 #include <ghostty/vt/color.h>
 #include <ghostty/vt/terminal.h>
@@ -49,6 +52,13 @@ extern "C" {
  * @ingroup render
  */
 typedef struct GhosttyRenderState* GhosttyRenderState;
+
+/**
+ * Opaque handle to a render-state row iterator.
+ *
+ * @ingroup render
+ */
+typedef struct GhosttyRenderStateRowIterator* GhosttyRenderStateRowIterator;
 
 /**
  * Dirty state of a render state after update.
@@ -198,6 +208,33 @@ GhosttyResult ghostty_render_state_dirty_get(GhosttyRenderState state,
  */
 GhosttyResult ghostty_render_state_dirty_set(GhosttyRenderState state,
                                              GhosttyRenderStateDirty dirty);
+
+/**
+ * Create a row iterator for a render state.
+ *
+ * The iterator borrows from `state`; `state` must outlive the iterator.
+ *
+ * @param allocator Pointer to allocator, or NULL to use the default allocator
+ * @param state The render state handle to iterate (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param[out] out_iterator On success, receives the created iterator handle
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if `state` is
+ *         NULL, GHOSTTY_OUT_OF_MEMORY on allocation failure
+ *
+ * @ingroup render
+ */
+GhosttyResult ghostty_render_state_row_iterator_new(
+    const GhosttyAllocator* allocator,
+    GhosttyRenderState state,
+    GhosttyRenderStateRowIterator* out_iterator);
+
+/**
+ * Free a render-state row iterator.
+ *
+ * @param iterator The iterator handle to free (may be NULL)
+ *
+ * @ingroup render
+ */
+void ghostty_render_state_row_iterator_free(GhosttyRenderStateRowIterator iterator);
 
 /**
  * Free a render state instance.

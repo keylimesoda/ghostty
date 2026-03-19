@@ -189,6 +189,8 @@ comptime {
         @export(&c.render_state_colors_get, .{ .name = "ghostty_render_state_colors_get" });
         @export(&c.render_state_dirty_get, .{ .name = "ghostty_render_state_dirty_get" });
         @export(&c.render_state_dirty_set, .{ .name = "ghostty_render_state_dirty_set" });
+        @export(&c.render_state_row_iterator_new, .{ .name = "ghostty_render_state_row_iterator_new" });
+        @export(&c.render_state_row_iterator_free, .{ .name = "ghostty_render_state_row_iterator_free" });
         @export(&c.render_state_free, .{ .name = "ghostty_render_state_free" });
         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
