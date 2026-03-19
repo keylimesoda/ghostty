@@ -41,6 +41,7 @@ pub const render_state_colors_get = render.colors_get;
 pub const render_state_dirty_get = render.dirty_get;
 pub const render_state_dirty_set = render.dirty_set;
 pub const render_state_row_iterator_new = render.row_iterator_new;
+pub const render_state_row_iterator_next = render.row_iterator_next;
 pub const render_state_row_iterator_free = render.row_iterator_free;
 
 pub const sgr_new = sgr.new;

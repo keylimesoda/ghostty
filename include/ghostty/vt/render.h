@@ -228,6 +228,20 @@ GhosttyResult ghostty_render_state_row_iterator_new(
     GhosttyRenderStateRowIterator* out_iterator);
 
 /**
+ * Move a render-state row iterator to the next row.
+ *
+ * Returns true if the iterator moved successfully and row data is
+ * available to read at the new position.
+ *
+ * @param iterator The iterator handle to advance (may be NULL)
+ * @return true if advanced to the next row, false if `iterator` is
+ *         NULL or if the iterator has reached the end
+ *
+ * @ingroup render
+ */
+bool ghostty_render_state_row_iterator_next(GhosttyRenderStateRowIterator iterator);
+
+/**
  * Free a render-state row iterator.
  *
  * @param iterator The iterator handle to free (may be NULL)

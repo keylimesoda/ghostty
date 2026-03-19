@@ -20,7 +20,7 @@ const RowIteratorWrapper = struct {
     alloc: std.mem.Allocator,
 
     /// The current index (also y value) into the row list.
-    y: size.CellCountInt,
+    y: ?size.CellCountInt,
 
     /// These are the raw pointers into the render state data.
     raws: []const page.Row,
@@ -67,6 +67,13 @@ fn new_(alloc_: ?*const CAllocator) error{OutOfMemory}!*RenderStateWrapper {
         return error.OutOfMemory;
     ptr.* = .{ .alloc = alloc };
     return ptr;
+}
+
+pub fn free(state_: RenderState) callconv(.c) void {
+    const state = state_ orelse return;
+    const alloc = state.alloc;
+    state.state.deinit(alloc);
+    alloc.destroy(state);
 }
 
 pub fn update(
@@ -208,7 +215,7 @@ fn row_iterator_new_(
     const row_data = state.state.row_data.slice();
     it.* = .{
         .alloc = alloc,
-        .y = 0,
+        .y = null,
         .raws = row_data.items(.raw),
         .cells = row_data.items(.cells),
         .dirty = row_data.items(.dirty),
@@ -223,11 +230,12 @@ pub fn row_iterator_free(iterator_: RowIterator) callconv(.c) void {
     alloc.destroy(iterator);
 }
 
-pub fn free(state_: RenderState) callconv(.c) void {
-    const state = state_ orelse return;
-    const alloc = state.alloc;
-    state.state.deinit(alloc);
-    alloc.destroy(state);
+pub fn row_iterator_next(iterator_: RowIterator) callconv(.c) bool {
+    const it = iterator_ orelse return false;
+    const next_y: size.CellCountInt = if (it.y) |y| y + 1 else 0;
+    if (next_y >= it.raws.len) return false;
+    it.y = next_y;
+    return true;
 }
 
 test "render: new/free" {
@@ -410,7 +418,7 @@ test "render: row iterator new/free" {
     const iterator_ptr = iterator.?;
     const row_data = state.?.state.row_data.slice();
 
-    try testing.expectEqual(@as(size.CellCountInt, 0), iterator_ptr.y);
+    try testing.expectEqual(@as(?size.CellCountInt, null), iterator_ptr.y);
     try testing.expectEqual(row_data.items(.raw).len, iterator_ptr.raws.len);
     try testing.expectEqual(row_data.items(.cells).len, iterator_ptr.cells.len);
     try testing.expectEqual(row_data.items(.dirty).len, iterator_ptr.dirty.len);
@@ -418,6 +426,59 @@ test "render: row iterator new/free" {
 
 test "render: row iterator free null" {
     row_iterator_free(null);
+}
+
+test "render: row iterator next null" {
+    try testing.expect(!row_iterator_next(null));
+}
+
+test "render: row iterator next" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib_alloc.test_allocator,
+        &terminal,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer terminal_c.free(terminal);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    var iterator: RowIterator = null;
+    try testing.expectEqual(Result.success, row_iterator_new(
+        &lib_alloc.test_allocator,
+        state,
+        &iterator,
+    ));
+    defer row_iterator_free(iterator);
+
+    const rows = state.?.state.rows;
+    if (rows == 0) {
+        try testing.expect(!row_iterator_next(iterator));
+        return;
+    }
+
+    try testing.expect(row_iterator_next(iterator));
+    try testing.expectEqual(@as(?size.CellCountInt, 0), iterator.?.y);
+
+    var i: size.CellCountInt = 1;
+    while (i < rows) : (i += 1) {
+        try testing.expect(row_iterator_next(iterator));
+        try testing.expectEqual(@as(?size.CellCountInt, i), iterator.?.y);
+    }
+
+    try testing.expect(!row_iterator_next(iterator));
+    try testing.expectEqual(@as(?size.CellCountInt, rows - 1), iterator.?.y);
 }
 
 test "render: update" {
