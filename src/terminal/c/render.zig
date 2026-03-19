@@ -25,7 +25,7 @@ const RowIteratorWrapper = struct {
 
     /// These are the raw pointers into the render state data.
     raws: []const page.Row,
-    cells: []const std.MultiArrayList(renderpkg.RenderState.Cell).Slice,
+    cells: []const std.MultiArrayList(renderpkg.RenderState.Cell),
     dirty: []bool,
 };
 
@@ -218,7 +218,7 @@ fn row_iterator_new_(
         .alloc = alloc,
         .y = null,
         .raws = row_data.items(.raw),
-        .cells = row_data.items(.cells).slice(),
+        .cells = row_data.items(.cells),
         .dirty = row_data.items(.dirty),
     };
 
