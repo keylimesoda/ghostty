@@ -7,6 +7,7 @@ const CAllocator = lib_alloc.Allocator;
 const colorpkg = @import("../color.zig");
 const page = @import("../page.zig");
 const size = @import("../size.zig");
+const Style = @import("../style.zig").Style;
 const terminal_c = @import("terminal.zig");
 const renderpkg = @import("../render.zig");
 const Result = @import("result.zig").Result;
@@ -24,8 +25,8 @@ const RowIteratorWrapper = struct {
 
     /// These are the raw pointers into the render state data.
     raws: []const page.Row,
-    cells: []const std.MultiArrayList(renderpkg.RenderState.Cell),
-    dirty: []const bool,
+    cells: []const std.MultiArrayList(renderpkg.RenderState.Cell).Slice,
+    dirty: []bool,
 };
 
 /// C: GhosttyRenderState
@@ -217,7 +218,7 @@ fn row_iterator_new_(
         .alloc = alloc,
         .y = null,
         .raws = row_data.items(.raw),
-        .cells = row_data.items(.cells),
+        .cells = row_data.items(.cells).slice(),
         .dirty = row_data.items(.dirty),
     };
 
@@ -236,6 +237,22 @@ pub fn row_iterator_next(iterator_: RowIterator) callconv(.c) bool {
     if (next_y >= it.raws.len) return false;
     it.y = next_y;
     return true;
+}
+
+pub fn row_dirty_get(iterator_: RowIterator) callconv(.c) bool {
+    const it = iterator_ orelse return false;
+    const y = it.y orelse return false;
+    return it.dirty[y];
+}
+
+pub fn row_dirty_set(
+    iterator_: RowIterator,
+    dirty: bool,
+) callconv(.c) Result {
+    const it = iterator_ orelse return .invalid_value;
+    const y = it.y orelse return .invalid_value;
+    it.dirty[y] = dirty;
+    return .success;
 }
 
 test "render: new/free" {
@@ -430,6 +447,132 @@ test "render: row iterator free null" {
 
 test "render: row iterator next null" {
     try testing.expect(!row_iterator_next(null));
+}
+
+test "render: row iterator dirty get null" {
+    try testing.expect(!row_dirty_get(null));
+}
+
+test "render: row iterator dirty set invalid value" {
+    try testing.expectEqual(Result.invalid_value, row_dirty_set(null, false));
+
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib_alloc.test_allocator,
+        &terminal,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer terminal_c.free(terminal);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    var iterator: RowIterator = null;
+    try testing.expectEqual(Result.success, row_iterator_new(
+        &lib_alloc.test_allocator,
+        state,
+        &iterator,
+    ));
+    defer row_iterator_free(iterator);
+
+    try testing.expectEqual(Result.invalid_value, row_dirty_set(iterator, false));
+}
+
+test "render: row iterator dirty get before iteration" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib_alloc.test_allocator,
+        &terminal,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer terminal_c.free(terminal);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    var iterator: RowIterator = null;
+    try testing.expectEqual(Result.success, row_iterator_new(
+        &lib_alloc.test_allocator,
+        state,
+        &iterator,
+    ));
+    defer row_iterator_free(iterator);
+
+    try testing.expect(!row_dirty_get(iterator));
+}
+
+test "render: row iterator dirty get" {
+    var terminal: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib_alloc.test_allocator,
+        &terminal,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer terminal_c.free(terminal);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &state,
+    ));
+    defer free(state);
+
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    // Dirty the first row so the iterator has at least one dirty row to observe.
+    terminal_c.vt_write(terminal, "hello", 5);
+    try testing.expectEqual(Result.success, update(state, terminal));
+
+    // Create an iterator and verify it is dirty.
+    var it: RowIterator = null;
+    try testing.expectEqual(Result.success, row_iterator_new(
+        &lib_alloc.test_allocator,
+        state,
+        &it,
+    ));
+    defer row_iterator_free(it);
+
+    try testing.expect(row_iterator_next(it));
+    try testing.expect(row_dirty_get(it));
+
+    // Clear dirty on this row.
+    try testing.expectEqual(Result.success, row_dirty_set(it, false));
+
+    // It should not be dirty anymore.
+    var it2: RowIterator = null;
+    try testing.expectEqual(Result.success, row_iterator_new(
+        &lib_alloc.test_allocator,
+        state,
+        &it2,
+    ));
+    defer row_iterator_free(it2);
+
+    try testing.expect(row_iterator_next(it2));
+    try testing.expect(!row_dirty_get(it2));
 }
 
 test "render: row iterator next" {

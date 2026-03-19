@@ -42,6 +42,8 @@ pub const render_state_dirty_get = render.dirty_get;
 pub const render_state_dirty_set = render.dirty_set;
 pub const render_state_row_iterator_new = render.row_iterator_new;
 pub const render_state_row_iterator_next = render.row_iterator_next;
+pub const render_state_row_dirty_get = render.row_dirty_get;
+pub const render_state_row_dirty_set = render.row_dirty_set;
 pub const render_state_row_iterator_free = render.row_iterator_free;
 
 pub const sgr_new = sgr.new;

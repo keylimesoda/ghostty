@@ -39,6 +39,25 @@ extern "C" {
  *   2. Update it from a terminal instance whenever you need.
  *   3. Read from the render state to get the data needed to draw your frame.
  *
+ * ## Dirty Tracking
+ *
+ * Dirty tracking is a key feature of the render state that allows renderers
+ * to efficiently determine what parts of the screen have changed and only 
+ * redraw changed regions.
+ *
+ * The render state API keeps track of dirty state at two independent layers:
+ * a global dirty state that indicates whether the entire frame is clean, 
+ * partially dirty, or fully dirty, and a per-row dirty state that allows 
+ * tracking which rows in a partially dirty frame have changed. 
+ *
+ * The user of the render state API is expected to unset both of these.
+ * The `update` call does not unset dirty state, it only updates it.
+ *
+ * An extremely important detail: setting one dirty state doesn't unset
+ * the other. For example, setting the global dirty state to false does not
+ * reset the row-level dirty flags. So, the caller of the render state API must
+ * be careful to manage both layers of dirty state correctly. 
+ *
  * ## Example
  *
  * @snippet c-vt-render/src/main.c render-state-update
@@ -127,6 +146,18 @@ typedef struct {
  */
 GhosttyResult ghostty_render_state_new(const GhosttyAllocator* allocator,
                                        GhosttyRenderState* state);
+
+/**
+ * Free a render state instance.
+ *
+ * Releases all resources associated with the render state. After this call,
+ * the render state handle becomes invalid.
+ *
+ * @param state The render state handle to free (may be NULL)
+ *
+ * @ingroup render
+ */
+void ghostty_render_state_free(GhosttyRenderState state);
 
 /**
  * Update a render state instance from a terminal.
@@ -228,6 +259,15 @@ GhosttyResult ghostty_render_state_row_iterator_new(
     GhosttyRenderStateRowIterator* out_iterator);
 
 /**
+ * Free a render-state row iterator.
+ *
+ * @param iterator The iterator handle to free (may be NULL)
+ *
+ * @ingroup render
+ */
+void ghostty_render_state_row_iterator_free(GhosttyRenderStateRowIterator iterator);
+
+/**
  * Move a render-state row iterator to the next row.
  *
  * Returns true if the iterator moved successfully and row data is
@@ -242,25 +282,37 @@ GhosttyResult ghostty_render_state_row_iterator_new(
 bool ghostty_render_state_row_iterator_next(GhosttyRenderStateRowIterator iterator);
 
 /**
- * Free a render-state row iterator.
+ * Get the dirty state of the current row in a render-state row iterator.
  *
- * @param iterator The iterator handle to free (may be NULL)
+ * This reads the dirty flag at the iterator's current row position.
+ * Call ghostty_render_state_row_iterator_next() at least once before
+ * calling this function.
+ *
+ * @param iterator The iterator handle to query (may be NULL)
+ * @return true if the current row is dirty, false if the row is clean,
+ *         `iterator` is NULL, or the iterator is not positioned on a row
  *
  * @ingroup render
  */
-void ghostty_render_state_row_iterator_free(GhosttyRenderStateRowIterator iterator);
+bool ghostty_render_state_row_dirty_get(GhosttyRenderStateRowIterator iterator);
 
 /**
- * Free a render state instance.
+ * Set the dirty state of the current row in a render-state row iterator.
  *
- * Releases all resources associated with the render state. After this call,
- * the render state handle becomes invalid.
+ * This writes the dirty flag at the iterator's current row position.
+ * Call ghostty_render_state_row_iterator_next() at least once before
+ * calling this function.
  *
- * @param state The render state handle to free (may be NULL)
+ * @param iterator The iterator handle to update (may be NULL)
+ * @param dirty The dirty state to set for the current row
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if
+ *         `iterator` is NULL or the iterator is not positioned on a row
  *
  * @ingroup render
  */
-void ghostty_render_state_free(GhosttyRenderState state);
+GhosttyResult ghostty_render_state_row_dirty_set(
+    GhosttyRenderStateRowIterator iterator,
+    bool dirty);
 
 /** @} */
 
