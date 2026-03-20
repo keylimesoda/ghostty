@@ -534,6 +534,10 @@ pub const Action = union(enum) {
     /// Open a new tab.
     new_tab,
 
+    /// Open a new tab with a specific shell/command.
+    /// The value is the command to run (e.g. "pwsh.exe", "cmd.exe").
+    new_tab_shell: []const u8,
+
     /// Go to the previous tab.
     previous_tab,
 
@@ -1377,6 +1381,7 @@ pub const Action = union(enum) {
             // come from. For example `new_window` needs to be sourced to
             // a surface so inheritance can be done correctly.
             .new_tab,
+            .new_tab_shell,
             .previous_tab,
             .next_tab,
             .last_tab,

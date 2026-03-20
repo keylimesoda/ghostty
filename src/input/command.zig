@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = @import("../quirks.zig").inlineAssert;
 const Allocator = std.mem.Allocator;
 const Action = @import("Binding.zig").Action;
@@ -418,6 +419,24 @@ fn actionCommands(action: Action.Key) []const Command {
             .title = "New Tab",
             .description = "Open a new tab.",
         }},
+
+        .new_tab_shell => comptime if (builtin.os.tag == .windows) &.{
+            .{
+                .action = .{ .new_tab_shell = "pwsh.exe" },
+                .title = "New Tab (PowerShell 7)",
+                .description = "Open a new tab with PowerShell 7.",
+            },
+            .{
+                .action = .{ .new_tab_shell = "powershell.exe" },
+                .title = "New Tab (Windows PowerShell)",
+                .description = "Open a new tab with Windows PowerShell.",
+            },
+            .{
+                .action = .{ .new_tab_shell = "cmd.exe" },
+                .title = "New Tab (CMD)",
+                .description = "Open a new tab with Command Prompt.",
+            },
+        } else &.{},
 
         .move_tab => comptime &.{
             .{

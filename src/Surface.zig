@@ -5443,6 +5443,10 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             {},
         ),
 
+        // Handled directly by the GTK apprt before reaching core dispatch.
+        // Should not be reached here, but needed for exhaustive switch.
+        .new_tab_shell => return true,
+
         .close_tab => |v| return try self.rt_app.performAction(
             .{ .surface = self },
             .close_tab,

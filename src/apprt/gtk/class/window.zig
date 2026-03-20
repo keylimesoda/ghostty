@@ -740,6 +740,22 @@ pub const Window = extern struct {
         self: *Self,
         action: input.Binding.Action,
     ) void {
+        // Handle new_tab_shell directly at the GTK layer since it needs
+        // to pass a command override through the tab creation chain.
+        switch (action) {
+            .new_tab_shell => |shell| {
+                const active_surface = self.getActiveSurface() orelse return;
+                const core_surface = active_surface.core() orelse return;
+                const alloc = Application.default().allocator();
+                const shell_z = alloc.dupeZ(u8, shell) catch return;
+                _ = self.newTabPage(core_surface, .tab, .{
+                    .command = .{ .shell = shell_z },
+                });
+                return;
+            },
+            else => {},
+        }
+
         const surface = self.getActiveSurface() orelse return;
         const core_surface = surface.core() orelse return;
         _ = core_surface.performBindingAction(action) catch |err| {
