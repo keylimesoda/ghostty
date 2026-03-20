@@ -31,6 +31,7 @@ const SearchOverlay = @import("search_overlay.zig").SearchOverlay;
 const KeyStateOverlay = @import("key_state_overlay.zig").KeyStateOverlay;
 const ChildExited = @import("surface_child_exited.zig").SurfaceChildExited;
 const ClipboardConfirmationDialog = @import("clipboard_confirmation_dialog.zig").ClipboardConfirmationDialog;
+const CloseConfirmationDialog = @import("close_confirmation_dialog.zig").CloseConfirmationDialog;
 const TitleDialog = @import("title_dialog.zig").TitleDialog;
 const Window = @import("window.zig").Window;
 const SplitTree = @import("split_tree.zig").SplitTree;
@@ -717,6 +718,10 @@ pub const Surface = extern struct {
         /// The command that was used to start this surface's shell.
         /// Stored after initialization so splits can inherit it.
         resolved_command: ?configpkg.Command = null,
+
+        /// Pending shell change command, stored while the confirmation
+        /// dialog is displayed. Consumed by the confirmation callback.
+        pending_shell_change: ?[:0]const u8 = null,
 
         pub var offset: c_int = 0;
     };
@@ -2616,7 +2621,43 @@ pub const Surface = extern struct {
             break :resolved alloc.dupeZ(u8, shell) catch return;
         };
 
-        // Find the SplitTree ancestor and replace this surface in-place.
+        const priv = self.private();
+
+        // Free any previous pending shell change.
+        if (priv.pending_shell_change) |old| {
+            alloc.free(old);
+        }
+        priv.pending_shell_change = resolved;
+
+        // Check if the running process needs confirmation before killing.
+        if (self.core()) |core_surface| {
+            if (core_surface.needsConfirmQuit()) {
+                const dialog: *CloseConfirmationDialog = .new(.surface);
+                _ = CloseConfirmationDialog.signals.@"close-request".connect(
+                    dialog,
+                    *Self,
+                    changeShellConfirmed,
+                    self,
+                    .{},
+                );
+                dialog.present(self.as(gtk.Widget));
+                return;
+            }
+        }
+
+        // No confirmation needed — proceed immediately.
+        changeShellConfirmed(null, self);
+    }
+
+    /// Callback after the user confirms (or skips) the close dialog.
+    fn changeShellConfirmed(
+        _: ?*CloseConfirmationDialog,
+        self: *Self,
+    ) callconv(.c) void {
+        const priv = self.private();
+        const resolved = priv.pending_shell_change orelse return;
+        priv.pending_shell_change = null;
+
         const split_tree = ext.getAncestor(SplitTree, self.as(gtk.Widget)) orelse return;
         split_tree.replaceSurface(self, .{ .shell = resolved }) catch |err| {
             log.warn("failed to replace surface shell err={}", .{err});
