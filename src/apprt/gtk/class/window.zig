@@ -747,9 +747,28 @@ pub const Window = extern struct {
                 const active_surface = self.getActiveSurface() orelse return;
                 const core_surface = active_surface.core() orelse return;
                 const alloc = Application.default().allocator();
-                const shell_z = alloc.dupeZ(u8, shell) catch return;
+
+                // Resolve bare shell names to full paths via PATH search.
+                // Without this, CreateProcessW fails on names like "pwsh.exe".
+                const resolved = if (std.fs.path.isAbsolute(shell))
+                    alloc.dupeZ(u8, shell) catch return
+                else resolved: {
+                    const path_env = std.process.getEnvVarOwned(alloc, "PATH") catch break :resolved alloc.dupeZ(u8, shell) catch return;
+                    defer alloc.free(path_env);
+                    var path_iter = std.mem.splitScalar(u8, path_env, ';');
+                    while (path_iter.next()) |dir| {
+                        const full = std.fs.path.joinZ(alloc, &.{ dir, shell }) catch continue;
+                        if (std.fs.cwd().statFile(full)) |_| {
+                            break :resolved full;
+                        } else |_| {
+                            alloc.free(full);
+                        }
+                    }
+                    break :resolved alloc.dupeZ(u8, shell) catch return;
+                };
+
                 _ = self.newTabPage(core_surface, .tab, .{
-                    .command = .{ .shell = shell_z },
+                    .command = .{ .shell = resolved },
                 });
                 return;
             },

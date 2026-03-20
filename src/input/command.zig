@@ -436,6 +436,11 @@ fn actionCommands(action: Action.Key) []const Command {
                 .title = "New Tab (CMD)",
                 .description = "Open a new tab with Command Prompt.",
             },
+            .{
+                .action = .{ .new_tab_shell = "wsl.exe" },
+                .title = "New Tab (WSL)",
+                .description = "Open a new tab with Windows Subsystem for Linux.",
+            },
         } else &.{},
 
         .move_tab => comptime &.{

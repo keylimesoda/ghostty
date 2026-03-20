@@ -1556,6 +1556,8 @@ fn execCommand(
                     std.mem.eql(u8, base, "powershell.exe");
                 const is_cmd = std.mem.eql(u8, base, "cmd") or
                     std.mem.eql(u8, base, "cmd.exe");
+                const is_wsl = std.mem.eql(u8, base, "wsl") or
+                    std.mem.eql(u8, base, "wsl.exe");
 
                 if (is_pwsh) {
                     try args.append(alloc, v);
@@ -1565,6 +1567,9 @@ fn execCommand(
                 } else if (is_cmd) {
                     try args.append(alloc, v);
                     try args.append(alloc, "/K");
+                    break :shell try args.toOwnedSlice(alloc);
+                } else if (is_wsl) {
+                    try args.append(alloc, v);
                     break :shell try args.toOwnedSlice(alloc);
                 }
 
