@@ -233,6 +233,9 @@ pub fn focusGained(
 ) !void {
     _ = self;
 
+    // termios is not available on Windows; skip timer management.
+    if (comptime builtin.os.tag == .windows) return;
+
     assert(td.backend == .exec);
     const execdata = &td.backend.exec;
 
@@ -1562,7 +1565,9 @@ fn execCommand(
                 });
 
                 try args.append(alloc, cmd);
-                try args.append(alloc, "/C");
+                // /K keeps the shell interactive (runs command then stays open),
+                // unlike /C which exits immediately after execution.
+                try args.append(alloc, "/K");
             } else {
                 // We run our shell wrapped in `/bin/sh` so that we don't have
                 // to parse the command line ourselves if it has arguments.

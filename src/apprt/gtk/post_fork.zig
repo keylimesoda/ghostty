@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const gio = @import("gio");
 const glib = @import("glib");
@@ -36,6 +37,9 @@ pub const PostForkInfo = struct {
 /// If we are configured to hard fail, log an error message and return an error
 /// code if we don't detect the move in time.
 pub fn postFork(cmd: *Command) Command.PostForkError!void {
+    // cgroup scope management is Linux-specific; no-op elsewhere.
+    if (comptime builtin.os.tag != .linux) return;
+
     switch (cmd.rt_post_fork_info.linux_cgroup) {
         .always => {},
         .never => return,

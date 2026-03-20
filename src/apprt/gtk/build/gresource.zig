@@ -144,7 +144,7 @@ pub fn main() !void {
     }
 
     var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
+    var stdout = std.fs.File.stdout().writerStreaming(&buf);
     const writer = &stdout.interface;
     try writer.writeAll(
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -250,6 +250,13 @@ fn genUi(
     , .{build_info.resource_path});
 
     for (files.items) |ui_file| {
+        // On Windows, path separators may be backslashes; normalize to
+        // forward slashes so the endsWith check against POSIX-style
+        // expected paths works correctly.
+        const normalized = try alloc.dupe(u8, ui_file);
+        defer alloc.free(normalized);
+        std.mem.replaceScalar(u8, normalized, '\\', '/');
+
         for (blueprints) |bp| {
             const expected = try std.fmt.allocPrint(
                 alloc,
@@ -257,15 +264,13 @@ fn genUi(
                 .{ bp.major, bp.minor, bp.name },
             );
             defer alloc.free(expected);
-            if (!std.mem.endsWith(u8, ui_file, expected)) continue;
+            if (!std.mem.endsWith(u8, normalized, expected)) continue;
             try writer.print(
                 "    <file compressed=\"true\" preprocess=\"xml-stripblanks\" alias=\"{d}.{d}/{s}.ui\">{s}</file>\n",
                 .{ bp.major, bp.minor, bp.name, ui_file },
             );
             break;
         } else {
-            // The for loop never broke which means it didn't find
-            // a matching blueprint for this input.
             return error.BlueprintNotFound;
         }
     }

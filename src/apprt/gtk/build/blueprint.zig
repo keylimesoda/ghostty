@@ -6,6 +6,7 @@
 //! Example: blueprint.zig 1 5 output.ui input.blp
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const c = @cImport({
     @cInclude("adwaita.h");
@@ -35,6 +36,37 @@ const required_blueprint_version = std.SemanticVersion{
     .minor = 16,
     .patch = 0,
 };
+
+/// On Windows, `blueprint-compiler` is a Python script without a `.exe`
+/// extension. We need to invoke it via `python3 <full-path>` because:
+/// 1. Windows can't execute shebang scripts directly
+/// 2. Python resolves script paths relative to CWD, not PATH
+/// This function finds the full path to `blueprint-compiler` on PATH and
+/// returns the correct argv prefix for the current platform.
+fn blueprintCompilerArgv(alloc: std.mem.Allocator) ![]const []const u8 {
+    if (builtin.os.tag != .windows) {
+        return alloc.dupe([]const u8, &.{"blueprint-compiler"});
+    }
+
+    // On Windows, search PATH for the blueprint-compiler script and
+    // invoke it via python3 with the resolved absolute path.
+    const path_env = std.process.getEnvVarOwned(alloc, "PATH") catch
+        return alloc.dupe([]const u8, &.{ "python3", "blueprint-compiler" });
+    defer alloc.free(path_env);
+
+    var iter = std.mem.splitScalar(u8, path_env, ';');
+    while (iter.next()) |dir| {
+        if (dir.len == 0) continue;
+        const candidate = std.fs.path.join(alloc, &.{ dir, "blueprint-compiler" }) catch continue;
+        if (std.fs.cwd().access(candidate, .{})) |_| {
+            return alloc.dupe([]const u8, &.{ "python3", candidate });
+        } else |_| {
+            alloc.free(candidate);
+        }
+    }
+
+    return alloc.dupe([]const u8, &.{ "python3", "blueprint-compiler" });
+}
 
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -67,21 +99,35 @@ pub fn main() !void {
     }
 
     // Version checks
+    const bp_argv = try blueprintCompilerArgv(alloc);
+
+    // On Windows, Python defaults to the system locale encoding (cp1252)
+    // which can't handle UTF-8 blueprint files. Force UTF-8 mode.
+    var env_map: ?std.process.EnvMap = if (builtin.os.tag == .windows) env: {
+        var env = try std.process.getEnvMap(alloc);
+        try env.put("PYTHONUTF8", "1");
+        break :env env;
+    } else null;
+    defer if (env_map) |*e| e.deinit();
+
     {
         var stdout: std.ArrayListUnmanaged(u8) = .empty;
         defer stdout.deinit(alloc);
         var stderr: std.ArrayListUnmanaged(u8) = .empty;
         defer stderr.deinit(alloc);
 
+        var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(alloc);
+        try argv.appendSlice(alloc, bp_argv);
+        try argv.append(alloc, "--version");
+
         var blueprint_compiler = std.process.Child.init(
-            &.{
-                "blueprint-compiler",
-                "--version",
-            },
+            argv.items,
             alloc,
         );
         blueprint_compiler.stdout_behavior = .Pipe;
         blueprint_compiler.stderr_behavior = .Pipe;
+        if (env_map) |*e| blueprint_compiler.env_map = e;
         try blueprint_compiler.spawn();
         try blueprint_compiler.collectOutput(
             alloc,
@@ -127,18 +173,23 @@ pub fn main() !void {
         var stderr: std.ArrayListUnmanaged(u8) = .empty;
         defer stderr.deinit(alloc);
 
-        var blueprint_compiler = std.process.Child.init(
-            &.{
-                "blueprint-compiler",
+        var blueprint_compiler = blk: {
+            var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+            try argv.appendSlice(alloc, bp_argv);
+            try argv.appendSlice(alloc, &.{
                 "compile",
                 "--output",
                 output,
                 input,
-            },
-            alloc,
-        );
+            });
+            break :blk std.process.Child.init(
+                argv.items,
+                alloc,
+            );
+        };
         blueprint_compiler.stdout_behavior = .Pipe;
         blueprint_compiler.stderr_behavior = .Pipe;
+        if (env_map) |*e| blueprint_compiler.env_map = e;
         try blueprint_compiler.spawn();
         try blueprint_compiler.collectOutput(
             alloc,
