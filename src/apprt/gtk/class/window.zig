@@ -413,7 +413,7 @@ pub const Window = extern struct {
         );
     }
 
-    pub fn newTabPage(
+    fn newTabPage(
         self: *Self,
         parent_: ?*CoreSurface,
         context: apprt.surface.NewSurfaceContext,

@@ -568,6 +568,40 @@ pub fn SplitTree(comptime V: type) type {
             };
         }
 
+        /// Replace a leaf node with a different view, preserving the
+        /// tree structure. The node at `at` must be a leaf.
+        pub fn replace(
+            self: *const Self,
+            gpa: Allocator,
+            at: Node.Handle,
+            new_view: *View,
+        ) Allocator.Error!Self {
+            assert(at.idx() < self.nodes.len);
+            assert(self.nodes[at.idx()] == .leaf);
+
+            var arena = ArenaAllocator.init(gpa);
+            errdefer arena.deinit();
+            const alloc = arena.allocator();
+
+            const nodes = try alloc.alloc(Node, self.nodes.len);
+            for (self.nodes, 0..) |node, i| {
+                if (i == at.idx()) {
+                    nodes[i] = .{ .leaf = try viewRef(new_view, gpa) };
+                } else {
+                    switch (node) {
+                        .leaf => |view| nodes[i] = .{ .leaf = try viewRef(view, gpa) },
+                        .split => |s| nodes[i] = .{ .split = s },
+                    }
+                }
+            }
+
+            return .{
+                .arena = arena,
+                .nodes = nodes,
+                .zoomed = self.zoomed,
+            };
+        }
+
         /// Remove a node from the tree.
         pub fn remove(
             self: *Self,

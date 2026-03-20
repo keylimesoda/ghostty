@@ -33,6 +33,7 @@ const ChildExited = @import("surface_child_exited.zig").SurfaceChildExited;
 const ClipboardConfirmationDialog = @import("clipboard_confirmation_dialog.zig").ClipboardConfirmationDialog;
 const TitleDialog = @import("title_dialog.zig").TitleDialog;
 const Window = @import("window.zig").Window;
+const SplitTree = @import("split_tree.zig").SplitTree;
 const InspectorWindow = @import("inspector_window.zig").InspectorWindow;
 const i18n = @import("../../../os/i18n.zig");
 const media = @import("../media.zig");
@@ -2578,8 +2579,8 @@ pub const Surface = extern struct {
         action.setState(glib.Variant.newBoolean(@intFromBool(!value)));
     }
 
-    /// Handle the "Change Shell" context menu action. Opens a new tab
-    /// with the selected shell and closes the current pane.
+    /// Handle the "Change Shell" context menu action. Replaces this
+    /// pane's surface with a new one running the selected shell.
     fn actionChangeShell(
         _: *gio.SimpleAction,
         args_: ?*glib.Variant,
@@ -2594,8 +2595,6 @@ pub const Surface = extern struct {
         args.get("&s", &shell_name);
         const shell = std.mem.span(shell_name orelse return);
 
-        const window = ext.getAncestor(Window, self.as(gtk.Widget)) orelse return;
-        const core_surface = self.core() orelse return;
         const alloc = Application.default().allocator();
 
         // Resolve bare shell names to full paths via PATH search.
@@ -2617,11 +2616,11 @@ pub const Surface = extern struct {
             break :resolved alloc.dupeZ(u8, shell) catch return;
         };
 
-        // Open a new tab with the selected shell, then close this pane.
-        _ = window.newTabPage(core_surface, .tab, .{
-            .command = .{ .shell = resolved },
-        });
-        self.close();
+        // Find the SplitTree ancestor and replace this surface in-place.
+        const split_tree = ext.getAncestor(SplitTree, self.as(gtk.Widget)) orelse return;
+        split_tree.replaceSurface(self, .{ .shell = resolved }) catch |err| {
+            log.warn("failed to replace surface shell err={}", .{err});
+        };
     }
 
     fn childExitedClose(

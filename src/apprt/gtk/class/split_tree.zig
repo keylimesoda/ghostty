@@ -277,6 +277,62 @@ pub const SplitTree = extern struct {
         self.setTree(&new_tree);
     }
 
+    /// Replace a surface in the tree with a new one running a different
+    /// command. The new surface inherits properties from the old one.
+    pub fn replaceSurface(
+        self: *Self,
+        old_surface: *Surface,
+        command: configpkg.Command,
+    ) Allocator.Error!void {
+        const alloc = Application.default().allocator();
+        const old_tree = self.getTree() orelse return;
+
+        // Find the handle for the old surface.
+        const handle = handle: {
+            var it = old_tree.iterator();
+            while (it.next()) |entry| {
+                if (entry.view == old_surface) break :handle entry.handle;
+            }
+            return;
+        };
+
+        // Get the working directory from the old surface.
+        const wd: ?[:0]const u8 = if (old_surface.core()) |cs|
+            cs.rt_surface.surface.getPwd()
+        else
+            null;
+
+        // Create the new surface with the selected command.
+        const new_surface: *Surface = .new(.{
+            .command = command,
+            .working_directory = wd,
+        });
+        defer new_surface.unref();
+        _ = new_surface.refSink();
+
+        // Inherit font size and other properties from the old surface.
+        if (old_surface.core()) |core| {
+            new_surface.setParent(core, .split);
+        }
+
+        // Bind is-split property.
+        _ = self.as(gobject.Object).bindProperty(
+            "is-split",
+            new_surface.as(gobject.Object),
+            "is-split",
+            .{ .sync_create = true },
+        );
+
+        // Replace the leaf in the tree.
+        var new_tree = try old_tree.replace(alloc, handle, new_surface);
+        defer new_tree.deinit();
+
+        // Focus the new surface.
+        self.private().last_focused.set(new_surface);
+
+        self.setTree(&new_tree);
+    }
+
     pub fn resize(
         self: *Self,
         direction: Surface.Tree.Split.Direction,
