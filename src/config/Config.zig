@@ -4578,8 +4578,27 @@ pub fn finalize(self: *Config) !void {
             switch (builtin.os.tag) {
                 .windows => {
                     if (self.command == null) {
-                        log.warn("no default shell found, will default to using cmd", .{});
-                        self.command = .{ .shell = "cmd.exe" };
+                        // Prefer PowerShell 7+ (pwsh), then Windows PowerShell,
+                        // then fall back to cmd.exe.
+                        const shells = [_][:0]const u8{ "pwsh.exe", "powershell.exe" };
+                        for (shells) |sh| {
+                            // Check if this shell is available by searching PATH.
+                            const path_env = std.process.getEnvVarOwned(alloc, "PATH") catch "";
+                            var path_iter = std.mem.splitScalar(u8, path_env, ';');
+                            while (path_iter.next()) |dir| {
+                                const full = std.fs.path.joinZ(alloc, &.{ dir, sh }) catch continue;
+                                if (std.fs.cwd().statFile(full)) |_| {
+                                    log.info("default shell: {s}", .{full});
+                                    self.command = .{ .shell = full };
+                                    break;
+                                } else |_| {}
+                            }
+                            if (self.command != null) break;
+                        }
+                        if (self.command == null) {
+                            log.warn("no default shell found, will default to using cmd", .{});
+                            self.command = .{ .shell = "cmd.exe" };
+                        }
                     }
 
                     if (wd == .home) {

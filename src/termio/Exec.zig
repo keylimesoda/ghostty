@@ -1546,11 +1546,30 @@ fn execCommand(
             defer args.deinit(alloc);
 
             if (comptime builtin.os.tag == .windows) {
-                // We run our shell wrapped in `cmd.exe` so that we don't have
-                // to parse the command line ourselves if it has arguments.
+                // On Windows, detect if the shell command is a known
+                // interactive shell and invoke it directly with the
+                // appropriate flags rather than wrapping in cmd.exe.
+                const base = std.fs.path.basename(std.mem.sliceTo(v, 0));
+                const is_pwsh = std.mem.eql(u8, base, "pwsh") or
+                    std.mem.eql(u8, base, "pwsh.exe") or
+                    std.mem.eql(u8, base, "powershell") or
+                    std.mem.eql(u8, base, "powershell.exe");
+                const is_cmd = std.mem.eql(u8, base, "cmd") or
+                    std.mem.eql(u8, base, "cmd.exe");
 
-                // Note we don't free any of the memory below since it is
-                // allocated in the arena.
+                if (is_pwsh) {
+                    try args.append(alloc, v);
+                    try args.append(alloc, "-NoLogo");
+                    try args.append(alloc, "-NoExit");
+                    break :shell try args.toOwnedSlice(alloc);
+                } else if (is_cmd) {
+                    try args.append(alloc, v);
+                    try args.append(alloc, "/K");
+                    break :shell try args.toOwnedSlice(alloc);
+                }
+
+                // For other commands, wrap in cmd.exe /K so we don't
+                // have to parse the command line ourselves.
                 const windir = std.process.getEnvVarOwned(
                     alloc,
                     "WINDIR",
@@ -1565,8 +1584,6 @@ fn execCommand(
                 });
 
                 try args.append(alloc, cmd);
-                // /K keeps the shell interactive (runs command then stays open),
-                // unlike /C which exits immediately after execution.
                 try args.append(alloc, "/K");
             } else {
                 // We run our shell wrapped in `/bin/sh` so that we don't have
