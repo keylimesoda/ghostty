@@ -713,6 +713,10 @@ pub const Surface = extern struct {
             pub const none: @This() = .{};
         } = .none,
 
+        /// The command that was used to start this surface's shell.
+        /// Stored after initialization so splits can inherit it.
+        resolved_command: ?configpkg.Command = null,
+
         pub var offset: c_int = 0;
     };
 
@@ -738,6 +742,11 @@ pub const Surface = extern struct {
     pub fn core(self: *Self) ?*CoreSurface {
         const priv = self.private();
         return priv.core_surface;
+    }
+
+    /// Returns the command that this surface was started with, if known.
+    pub fn getResolvedCommand(self: *Self) ?configpkg.Command {
+        return self.private().resolved_command;
     }
 
     pub fn rt(self: *Self) *ApprtSurface {
@@ -773,6 +782,16 @@ pub const Surface = extern struct {
         font_size_ptr.* = parent.font_size;
         priv.font_size_request = font_size_ptr;
         self.as(gobject.Object).notifyByPspec(properties.@"font-size-request".impl.param_spec);
+
+        // Inherit the parent's shell command if no override was set.
+        // This ensures splits use the same shell as the parent pane.
+        if (priv.overrides.command == null) {
+            const parent_surface = parent.rt_surface.surface;
+            if (parent_surface.getResolvedCommand()) |cmd| {
+                const alloc = Application.default().allocator();
+                priv.overrides.command = cmd.clone(alloc) catch null;
+            }
+        }
 
         // Remainder needs a config. If there is no config we just assume
         // we aren't inheriting any of these values.
@@ -1806,6 +1825,9 @@ pub const Surface = extern struct {
     fn initActionMap(self: *Self) void {
         const priv: *Private = self.private();
 
+        const s_variant_type = glib.ext.VariantType.newFor([:0]const u8);
+        defer s_variant_type.free();
+
         const actions = [_]ext.actions.Action(Self){
             .init(
                 "prompt-title",
@@ -1817,6 +1839,11 @@ pub const Surface = extern struct {
                 actionNotifyOnNextCommandFinish,
                 null,
                 glib.Variant.newBoolean(@intFromBool(false)),
+            ),
+            .init(
+                "change-shell",
+                actionChangeShell,
+                s_variant_type,
             ),
         };
 
@@ -2549,6 +2576,52 @@ pub const Surface = extern struct {
         if (state.isOfType(bool_variant_type) == 0) return;
         const value = state.getBoolean() != 0;
         action.setState(glib.Variant.newBoolean(@intFromBool(!value)));
+    }
+
+    /// Handle the "Change Shell" context menu action. Opens a new tab
+    /// with the selected shell and closes the current pane.
+    fn actionChangeShell(
+        _: *gio.SimpleAction,
+        args_: ?*glib.Variant,
+        self: *Self,
+    ) callconv(.c) void {
+        const args = args_ orelse {
+            log.warn("surface.change-shell called without a parameter", .{});
+            return;
+        };
+
+        var shell_name: ?[*:0]const u8 = null;
+        args.get("&s", &shell_name);
+        const shell = std.mem.span(shell_name orelse return);
+
+        const window = ext.getAncestor(Window, self.as(gtk.Widget)) orelse return;
+        const core_surface = self.core() orelse return;
+        const alloc = Application.default().allocator();
+
+        // Resolve bare shell names to full paths via PATH search.
+        const resolved = if (std.fs.path.isAbsolute(shell))
+            alloc.dupeZ(u8, shell) catch return
+        else resolved: {
+            const path_env = std.process.getEnvVarOwned(alloc, "PATH") catch
+                break :resolved alloc.dupeZ(u8, shell) catch return;
+            defer alloc.free(path_env);
+            var path_iter = std.mem.splitScalar(u8, path_env, ';');
+            while (path_iter.next()) |dir| {
+                const full = std.fs.path.joinZ(alloc, &.{ dir, shell }) catch continue;
+                if (std.fs.cwd().statFile(full)) |_| {
+                    break :resolved full;
+                } else |_| {
+                    alloc.free(full);
+                }
+            }
+            break :resolved alloc.dupeZ(u8, shell) catch return;
+        };
+
+        // Open a new tab with the selected shell, then close this pane.
+        _ = window.newTabPage(core_surface, .tab, .{
+            .command = .{ .shell = resolved },
+        });
+        self.close();
     }
 
     fn childExitedClose(
@@ -3362,6 +3435,12 @@ pub const Surface = extern struct {
 
         if (priv.overrides.command) |c| {
             config.command = try c.clone(config._arena.?.allocator());
+        }
+
+        // Store the resolved command (override or config default) so
+        // splits can inherit the same shell.
+        if (config.command) |c| {
+            priv.resolved_command = c.clone(alloc) catch null;
         }
         if (priv.overrides.working_directory) |wd| {
             const config_alloc = config.arenaAlloc();

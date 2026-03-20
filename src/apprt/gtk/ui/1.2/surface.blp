@@ -293,6 +293,34 @@ menu context_menu_model {
         action: "surface.prompt-title";
       }
 
+      submenu {
+        label: _("Change Shell");
+
+        item {
+          label: _("PowerShell 7");
+          action: "surface.change-shell";
+          target: "pwsh.exe";
+        }
+
+        item {
+          label: _("Windows PowerShell");
+          action: "surface.change-shell";
+          target: "powershell.exe";
+        }
+
+        item {
+          label: _("Command Prompt");
+          action: "surface.change-shell";
+          target: "cmd.exe";
+        }
+
+        item {
+          label: _("WSL");
+          action: "surface.change-shell";
+          target: "wsl.exe";
+        }
+      }
+
       item {
         label: _("Split Up");
         action: "split-tree.new-split";
