@@ -708,6 +708,9 @@ pub const Surface = extern struct {
         /// stops scrolling.
         pending_horizontal_scroll_reset: ?c_uint = null,
 
+        /// Tick callback ID for high-frequency rendering on Windows.
+        render_tick_callback_id: c_uint = 0,
+
         overrides: struct {
             command: ?configpkg.Command = null,
             working_directory: ?[:0]const u8 = null,
@@ -818,7 +821,73 @@ pub const Surface = extern struct {
     /// then we should force a redraw.
     pub fn redraw(self: *Self) void {
         const priv = self.private();
-        priv.gl_area.queueRender();
+        if (comptime @import("builtin").os.tag == .windows) {
+            // On Windows, bypass GTK's frame clock entirely by rendering
+            // and presenting directly via WGL SwapBuffers.
+            // Rate-limit to ~60 FPS to avoid monopolizing the main thread
+            // (SwapBuffers blocks for vsync, so unthrottled renders would
+            // starve the Windows message pump and freeze the window).
+            const S = struct {
+                var count: u64 = 0;
+                var renders: u64 = 0;
+                var last_log: ?std.time.Instant = null;
+                var last_render: ?std.time.Instant = null;
+            };
+            S.count += 1;
+
+            // Skip if less than 8ms since last render (cap at ~120 FPS)
+            if (std.time.Instant.now()) |now| {
+                if (S.last_render) |last| {
+                    if (now.since(last) < 8 * std.time.ns_per_ms) return;
+                }
+                S.last_render = now;
+
+                const should_log = if (S.last_log) |last|
+                    now.since(last) >= 5 * std.time.ns_per_s
+                else
+                    true;
+                if (should_log) {
+                    const fps = if (S.last_log) |last|
+                        S.renders * std.time.ns_per_s / now.since(last)
+                    else
+                        0;
+                    log.warn("[redraw] calls={} renders={} fps={}", .{ S.count, S.renders, fps });
+                    S.count = 0;
+                    S.renders = 0;
+                    S.last_log = now;
+                }
+            } else |_| {}
+
+            S.renders += 1;
+
+            priv.gl_area.makeCurrent();
+            if (priv.gl_area.getError()) |err| {
+                log.warn("[redraw] makeCurrent failed: {s}", .{err.f_message orelse "(unknown)"});
+                priv.gl_area.queueRender();
+                return;
+            }
+            if (priv.core_surface) |surface| {
+                surface.renderer.drawFrame(true) catch |err| {
+                    log.warn("[redraw] drawFrame failed: {}", .{err});
+                    priv.gl_area.queueRender();
+                    return;
+                };
+            }
+            // Present directly via WGL SwapBuffers
+            const wgl = struct {
+                extern "opengl32" fn wglGetCurrentDC() callconv(.winapi) ?std.os.windows.HDC;
+            };
+            if (wgl.wglGetCurrentDC()) |hdc| {
+                const gdi32 = struct {
+                    extern "gdi32" fn SwapBuffers(hdc: std.os.windows.HDC) callconv(.winapi) std.os.windows.BOOL;
+                };
+                _ = gdi32.SwapBuffers(hdc);
+            } else {
+                log.warn("[redraw] wglGetCurrentDC returned null", .{});
+            }
+        } else {
+            priv.gl_area.queueRender();
+        }
     }
 
     /// Callback used to determine whether border should be shown around the
@@ -3324,6 +3393,17 @@ pub const Surface = extern struct {
         // create a strong reference back to ourself and we want to be
         // able to release that in unrealize.
         priv.im_context.as(gtk.IMContext).setClientWidget(self.as(gtk.Widget));
+
+        // On Windows, register a tick callback to keep the frame clock
+        // running at its full rate. Without this, the GTK Win32 frame
+        // clock may stall when no widget explicitly requests redraws.
+        if (comptime @import("builtin").os.tag == .windows) {
+            priv.render_tick_callback_id = self.as(gtk.Widget).addTickCallback(
+                renderTickCallback,
+                null,
+                null,
+            );
+        }
     }
 
     fn glareaUnrealize(
@@ -3332,8 +3412,16 @@ pub const Surface = extern struct {
     ) callconv(.c) void {
         log.debug("unrealize", .{});
 
-        // Notify our core surface
+        // Remove the render tick callback on Windows
         const priv = self.private();
+        if (comptime @import("builtin").os.tag == .windows) {
+            if (priv.render_tick_callback_id != 0) {
+                self.as(gtk.Widget).removeTickCallback(priv.render_tick_callback_id);
+                priv.render_tick_callback_id = 0;
+            }
+        }
+
+        // Notify our core surface
         if (priv.core_surface) |surface| {
             // There is no guarantee that our GLArea context is current
             // when unrealize is emitted, so we need to make it current.
@@ -3375,7 +3463,28 @@ pub const Surface = extern struct {
             return 0;
         };
 
+        // On Windows, the GTK frame clock can tick at a very low rate.
+        // Immediately queue the next render to keep the frame clock
+        // continuously active, creating a render loop.
+        if (comptime @import("builtin").os.tag == .windows) {
+            priv.gl_area.queueRender();
+        }
+
         return 1;
+    }
+
+    /// Tick callback that keeps the frame clock continuously active
+    /// on Windows. Without this, the GTK Win32 frame clock may stall
+    /// at a very low rate (e.g. ~3 FPS).
+    fn renderTickCallback(
+        widget: *gtk.Widget,
+        _: *gdk.FrameClock,
+        _: ?*anyopaque,
+    ) callconv(.c) c_int {
+        const self: *Self = gobject.ext.cast(Self, widget) orelse return 0;
+        const priv = self.private();
+        priv.gl_area.queueRender();
+        return 1; // Continue the tick callback
     }
 
     fn glareaResize(

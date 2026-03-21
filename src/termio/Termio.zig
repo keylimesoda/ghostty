@@ -66,6 +66,10 @@ terminal_stream: StreamHandler.Stream,
 /// flooding with cursor resets.
 last_cursor_reset: ?std.time.Instant = null,
 
+/// Last time a render was queued. Used to coalesce render wakeups
+/// under heavy output load (e.g., full-screen video playback).
+last_render_queue: ?std.time.Instant = null,
+
 /// State we have for thread enter. This may be null if we don't need
 /// to keep track of any state or if its already been freed.
 thread_enter_state: ?*ThreadEnterState = null,
@@ -667,7 +671,7 @@ pub fn processOutput(self: *Termio, buf: []const u8) void {
 /// Process output from readdata but the lock is already held.
 fn processOutputLocked(self: *Termio, buf: []const u8) void {
     // Schedule a render. We can call this first because we have the lock.
-    self.terminal_stream.handler.queueRender() catch unreachable;
+    self.terminal_stream.handler.queueRender() catch {};
 
     // Whenever a character is typed, we ensure the cursor is in the
     // non-blink state so it is rendered if visible. If we're under

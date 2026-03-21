@@ -1125,15 +1125,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             state: *renderer.State,
             cursor_blink_visible: bool,
         ) Allocator.Error!void {
-            // const start = std.time.Instant.now() catch unreachable;
-            // const start_micro = std.time.microTimestamp();
-            // defer {
-            //     const end = std.time.Instant.now() catch unreachable;
-            //     log.warn(
-            //         "[updateFrame time] start_micro={} duration={}ns",
-            //         .{ start_micro, end.since(start) / std.time.ns_per_us },
-            //     );
-            // }
+            const start = std.time.Instant.now() catch unreachable;
+            defer {
+                const end = std.time.Instant.now() catch unreachable;
+                const dur_us = end.since(start) / std.time.ns_per_us;
+                if (dur_us > 1000) // Only log frames > 1ms
+                    log.warn("[updateFrame] duration={}us", .{dur_us});
+            }
 
             // We fully deinit and reset the terminal state every so often
             // so that a particularly large terminal state doesn't cause
@@ -1163,12 +1161,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // Update all our data as tightly as possible within the mutex.
             var critical: Critical = critical: {
-                // const start = try std.time.Instant.now();
-                // const start_micro = std.time.microTimestamp();
-                // defer {
-                //     const end = std.time.Instant.now() catch unreachable;
-                //     std.log.err("[updateFrame critical time] start={}\tduration={} us", .{ start_micro, end.since(start) / std.time.ns_per_us });
-                // }
+                const crit_start = std.time.Instant.now() catch unreachable;
+                defer {
+                    const crit_end = std.time.Instant.now() catch unreachable;
+                    const dur_us = crit_end.since(crit_start) / std.time.ns_per_us;
+                    if (dur_us > 1000) // Only log if > 1ms
+                        log.warn("[updateFrame critical] duration={}us", .{dur_us});
+                }
 
                 state.mutex.lock();
                 defer state.mutex.unlock();
@@ -1431,15 +1430,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             self: *Self,
             sync: bool,
         ) !void {
-            // const start = std.time.Instant.now() catch unreachable;
-            // const start_micro = std.time.microTimestamp();
-            // defer {
-            //     const end = std.time.Instant.now() catch unreachable;
-            //     log.warn(
-            //         "[drawFrame time] start_micro={} duration={}ns",
-            //         .{ start_micro, end.since(start) / std.time.ns_per_us },
-            //     );
-            // }
+            const start = std.time.Instant.now() catch unreachable;
+            defer {
+                const end = std.time.Instant.now() catch unreachable;
+                const dur_us = end.since(start) / std.time.ns_per_us;
+                if (dur_us > 1000) // Only log frames > 1ms
+                    log.warn("[drawFrame] duration={}us", .{dur_us});
+            }
 
             // We hold a the draw mutex to prevent changes to any
             // data we access while we're in the middle of drawing.

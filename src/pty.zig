@@ -264,14 +264,23 @@ const WindowsPty = struct {
     in_pipe: windows.HANDLE,
     out_pipe_pty: windows.HANDLE,
     in_pipe_pty: windows.HANDLE,
-    pseudo_console: windows.exp.HPCON,
+    pseudo_console: ?windows.exp.HPCON,
+    direct_pipe: bool,
     size: winsize,
+
+    pub const Options = struct {
+        size: winsize,
+        /// When true, skip ConPTY creation and use direct pipes.
+        /// Used for WSL where Linux handles its own PTY.
+        direct_pipe: bool = false,
+    };
 
     pub const OpenError = error{Unexpected};
 
     /// Open a new PTY with the given initial size.
-    pub fn open(size: winsize) OpenError!Pty {
+    pub fn open(opts: Options) OpenError!Pty {
         var pty: Pty = undefined;
+        pty.direct_pipe = opts.direct_pipe;
 
         var pipe_path_buf: [128]u8 = undefined;
         var pipe_path_buf_w: [128]u16 = undefined;
@@ -344,7 +353,7 @@ const WindowsPty = struct {
         //     _ = windows.CloseHandle(pty.in_pipe);
         // }
 
-        if (windows.exp.kernel32.CreatePipe(&pty.out_pipe, &pty.out_pipe_pty, null, 0) == 0) {
+        if (windows.exp.kernel32.CreatePipe(&pty.out_pipe, &pty.out_pipe_pty, null, 128 * 1024) == 0) {
             return windows.unexpectedError(windows.kernel32.GetLastError());
         }
         errdefer {
@@ -352,30 +361,62 @@ const WindowsPty = struct {
             _ = windows.CloseHandle(pty.out_pipe_pty);
         }
 
-        try windows.SetHandleInformation(pty.in_pipe, windows.HANDLE_FLAG_INHERIT, 0);
-        try windows.SetHandleInformation(pty.in_pipe_pty, windows.HANDLE_FLAG_INHERIT, 0);
-        try windows.SetHandleInformation(pty.out_pipe, windows.HANDLE_FLAG_INHERIT, 0);
-        try windows.SetHandleInformation(pty.out_pipe_pty, windows.HANDLE_FLAG_INHERIT, 0);
+        if (opts.direct_pipe) {
+            // Direct pipe mode: skip ConPTY, make child-side handles inheritable
+            // so wsl.exe inherits them as stdin/stdout/stderr.
+            pty.pseudo_console = null;
+            try windows.SetHandleInformation(pty.in_pipe, windows.HANDLE_FLAG_INHERIT, 0);
+            try windows.SetHandleInformation(pty.in_pipe_pty, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT);
+            try windows.SetHandleInformation(pty.out_pipe, windows.HANDLE_FLAG_INHERIT, 0);
+            try windows.SetHandleInformation(pty.out_pipe_pty, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT);
+        } else {
+            // Standard ConPTY mode: all handles non-inheritable.
+            try windows.SetHandleInformation(pty.in_pipe, windows.HANDLE_FLAG_INHERIT, 0);
+            try windows.SetHandleInformation(pty.in_pipe_pty, windows.HANDLE_FLAG_INHERIT, 0);
+            try windows.SetHandleInformation(pty.out_pipe, windows.HANDLE_FLAG_INHERIT, 0);
+            try windows.SetHandleInformation(pty.out_pipe_pty, windows.HANDLE_FLAG_INHERIT, 0);
 
-        const result = windows.exp.kernel32.CreatePseudoConsole(
-            .{ .X = @intCast(size.ws_col), .Y = @intCast(size.ws_row) },
-            pty.in_pipe_pty,
-            pty.out_pipe_pty,
-            0,
-            &pty.pseudo_console,
-        );
-        if (result != windows.S_OK) return error.Unexpected;
+            var hpcon: windows.exp.HPCON = undefined;
+            const result = windows.exp.kernel32.CreatePseudoConsole(
+                .{ .X = @intCast(opts.size.ws_col), .Y = @intCast(opts.size.ws_row) },
+                pty.in_pipe_pty,
+                pty.out_pipe_pty,
+                0,
+                &hpcon,
+            );
+            if (result != windows.S_OK) return error.Unexpected;
+            pty.pseudo_console = hpcon;
+        }
 
-        pty.size = size;
+        pty.size = opts.size;
         return pty;
     }
 
+    /// Close the child-side pipe handles after the child process has inherited them.
+    /// This ensures ReadFile on the parent side returns EOF when the child exits.
+    pub fn closeChildPipes(self: *Pty) void {
+        if (self.in_pipe_pty != windows.INVALID_HANDLE_VALUE) {
+            _ = windows.CloseHandle(self.in_pipe_pty);
+            self.in_pipe_pty = windows.INVALID_HANDLE_VALUE;
+        }
+        if (self.out_pipe_pty != windows.INVALID_HANDLE_VALUE) {
+            _ = windows.CloseHandle(self.out_pipe_pty);
+            self.out_pipe_pty = windows.INVALID_HANDLE_VALUE;
+        }
+    }
+
     pub fn deinit(self: *Pty) void {
-        _ = windows.CloseHandle(self.in_pipe_pty);
+        if (self.in_pipe_pty != windows.INVALID_HANDLE_VALUE) {
+            _ = windows.CloseHandle(self.in_pipe_pty);
+        }
         _ = windows.CloseHandle(self.in_pipe);
-        _ = windows.CloseHandle(self.out_pipe_pty);
+        if (self.out_pipe_pty != windows.INVALID_HANDLE_VALUE) {
+            _ = windows.CloseHandle(self.out_pipe_pty);
+        }
         _ = windows.CloseHandle(self.out_pipe);
-        _ = windows.exp.kernel32.ClosePseudoConsole(self.pseudo_console);
+        if (self.pseudo_console) |pc| {
+            _ = windows.exp.kernel32.ClosePseudoConsole(pc);
+        }
         self.* = undefined;
     }
 
@@ -390,12 +431,13 @@ const WindowsPty = struct {
 
     /// Set the size of the pty.
     pub fn setSize(self: *Pty, size: winsize) SetSizeError!void {
-        const result = windows.exp.kernel32.ResizePseudoConsole(
-            self.pseudo_console,
-            .{ .X = @intCast(size.ws_col), .Y = @intCast(size.ws_row) },
-        );
-
-        if (result != windows.S_OK) return error.ResizeFailed;
+        if (self.pseudo_console) |pc| {
+            const result = windows.exp.kernel32.ResizePseudoConsole(
+                pc,
+                .{ .X = @intCast(size.ws_col), .Y = @intCast(size.ws_row) },
+            );
+            if (result != windows.S_OK) return error.ResizeFailed;
+        }
         self.size = size;
     }
 };
@@ -409,7 +451,7 @@ test {
         .ws_ypixel = 1,
     };
 
-    var pty = try Pty.open(ws);
+    var pty = try Pty.open(if (builtin.os.tag == .windows) .{ .size = ws } else ws);
     defer pty.deinit();
 
     // Initialize size should match what we gave it

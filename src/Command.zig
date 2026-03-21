@@ -341,7 +341,14 @@ fn startWindows(self: *Command, arena: Allocator) !void {
     };
 
     var flags: windows.DWORD = windows.exp.CREATE_UNICODE_ENVIRONMENT;
-    if (attribute_list != null) flags |= windows.exp.EXTENDED_STARTUPINFO_PRESENT;
+    if (attribute_list != null) {
+        flags |= windows.exp.EXTENDED_STARTUPINFO_PRESENT;
+    } else if (self.stdin != null) {
+        // No pseudo console but redirected stdio (direct pipe mode).
+        // Suppress the default console window that Windows would create.
+        const CREATE_NO_WINDOW = 0x08000000;
+        flags |= CREATE_NO_WINDOW;
+    }
 
     var process_information: windows.PROCESS_INFORMATION = undefined;
     if (windows.exp.kernel32.CreateProcessW(

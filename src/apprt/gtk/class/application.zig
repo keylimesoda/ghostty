@@ -474,6 +474,16 @@ pub const Application = extern struct {
         // Based on the actual `gio.Application.run` implementation:
         // https://github.com/GNOME/glib/blob/a8e8b742e7926e33eb635a8edceac74cf239d6ed/gio/gapplication.c#L2533
 
+        // On Windows, set the timer resolution to 1ms for responsive
+        // frame clock and sleep timing. Without this, all Windows
+        // timers have ~15.6ms resolution.
+        if (comptime builtin.os.tag == .windows) {
+            const winmm = struct {
+                extern "winmm" fn timeBeginPeriod(uPeriod: std.os.windows.UINT) callconv(.winapi) std.os.windows.UINT;
+            };
+            _ = winmm.timeBeginPeriod(1);
+        }
+
         // Acquire the default context for the application
         const ctx = glib.MainContext.default();
         if (glib.MainContext.acquire(ctx) == 0) return error.ContextAcquireFailed;
@@ -542,10 +552,24 @@ pub const Application = extern struct {
         defer log.debug("exiting runloop", .{});
         priv.running = true;
         while (priv.running) {
-            _ = glib.MainContext.iteration(ctx, 1);
-
-            // Tick the core Ghostty terminal app
-            try priv.core_app.tick(priv.rt_app);
+            // On Windows, use non-blocking iteration to avoid stalling
+            // on the GTK frame clock which may tick at very low rates.
+            // Process all pending events then proceed to tick.
+            if (comptime builtin.os.tag == .windows) {
+                var had_events = false;
+                while (glib.MainContext.iteration(ctx, 0) != 0) {
+                    had_events = true;
+                }
+                // Tick the core Ghostty terminal app
+                try priv.core_app.tick(priv.rt_app);
+                // If no events were pending, yield briefly to avoid
+                // busy-waiting. Windows Sleep(1) yields the timeslice.
+                if (!had_events) std.Thread.sleep(1 * std.time.ns_per_ms);
+            } else {
+                _ = glib.MainContext.iteration(ctx, 1);
+                // Tick the core Ghostty terminal app
+                try priv.core_app.tick(priv.rt_app);
+            }
 
             // Check if we must quit based on the current state.
             const must_quit = q: {

@@ -897,12 +897,33 @@ const Subprocess = struct {
         var in_child: bool = false;
 
         // Create our pty
-        var pty = try Pty.open(.{
-            .ws_row = @intCast(self.grid_size.rows),
-            .ws_col = @intCast(self.grid_size.columns),
-            .ws_xpixel = @intCast(self.screen_size.width),
-            .ws_ypixel = @intCast(self.screen_size.height),
-        });
+        const is_wsl = if (comptime builtin.os.tag == .windows) blk: {
+            // Detect wsl.exe to bypass ConPTY — WSL handles its own PTY
+            // via the Linux kernel, so direct pipes are faster.
+            if (self.args.len > 0) {
+                const base = std.fs.path.basename(std.mem.sliceTo(self.args[0], 0));
+                break :blk std.mem.eql(u8, base, "wsl") or std.mem.eql(u8, base, "wsl.exe");
+            }
+            break :blk false;
+        } else false;
+
+        var pty = if (comptime builtin.os.tag == .windows)
+            try Pty.open(.{
+                .size = .{
+                    .ws_row = @intCast(self.grid_size.rows),
+                    .ws_col = @intCast(self.grid_size.columns),
+                    .ws_xpixel = @intCast(self.screen_size.width),
+                    .ws_ypixel = @intCast(self.screen_size.height),
+                },
+                .direct_pipe = is_wsl,
+            })
+        else
+            try Pty.open(.{
+                .ws_row = @intCast(self.grid_size.rows),
+                .ws_col = @intCast(self.grid_size.columns),
+                .ws_xpixel = @intCast(self.screen_size.width),
+                .ws_ypixel = @intCast(self.screen_size.height),
+            });
         self.pty = pty;
         errdefer if (!in_child) {
             if (comptime builtin.os.tag != .windows) {
@@ -921,6 +942,13 @@ const Subprocess = struct {
                 // side. This prevents the slave fd from being leaked to
                 // future children.
                 _ = posix.close(pty.slave);
+            } else if (is_wsl) {
+                // In direct pipe mode, close child-side handles after the
+                // child process has inherited them. This ensures ReadFile
+                // returns EOF when the child exits.
+                if (self.pty) |*p| {
+                    p.closeChildPipes();
+                }
             }
 
             // Successful start we can clear out some memory.
@@ -1010,9 +1038,18 @@ const Subprocess = struct {
             .args = self.args,
             .env = if (self.env) |*env| env else null,
             .cwd = cwd,
-            .stdin = if (builtin.os.tag == .windows) null else .{ .handle = pty.slave },
-            .stdout = if (builtin.os.tag == .windows) null else .{ .handle = pty.slave },
-            .stderr = if (builtin.os.tag == .windows) null else .{ .handle = pty.slave },
+            .stdin = if (builtin.os.tag == .windows)
+                (if (is_wsl) .{ .handle = pty.in_pipe_pty } else null)
+            else
+                .{ .handle = pty.slave },
+            .stdout = if (builtin.os.tag == .windows)
+                (if (is_wsl) .{ .handle = pty.out_pipe_pty } else null)
+            else
+                .{ .handle = pty.slave },
+            .stderr = if (builtin.os.tag == .windows)
+                (if (is_wsl) .{ .handle = pty.out_pipe_pty } else null)
+            else
+                .{ .handle = pty.slave },
             .pseudo_console = if (builtin.os.tag == .windows) pty.pseudo_console else {},
             .os_pre_exec = switch (comptime builtin.os.tag) {
                 .windows => null,
@@ -1361,9 +1398,19 @@ pub const ReadThread = struct {
         };
         defer crash.sentry.thread_state = null;
 
-        var buf: [1024]u8 = undefined;
+        // Performance counters for throughput profiling
+        var perf_bytes: u64 = 0;
+        var perf_reads: u64 = 0;
+        var perf_read_ns: u64 = 0;
+        var perf_process_ns: u64 = 0;
+        var perf_last: ?std.time.Instant = std.time.Instant.now() catch null;
+        var perf_last_yield: ?std.time.Instant = null;
+
+        var buf: [64 * 1024]u8 = undefined;
         while (true) {
             while (true) {
+                const t0: ?std.time.Instant = std.time.Instant.now() catch null;
+
                 var n: windows.DWORD = 0;
                 if (windows.kernel32.ReadFile(fd, &buf, buf.len, &n, null) == 0) {
                     const err = windows.kernel32.GetLastError();
@@ -1378,7 +1425,70 @@ pub const ReadThread = struct {
                     }
                 }
 
+                const t1: ?std.time.Instant = std.time.Instant.now() catch null;
                 @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+                const t2: ?std.time.Instant = std.time.Instant.now() catch null;
+
+                // Periodically yield to the renderer thread so it can acquire
+                // renderer_state.mutex for updateFrame(). Windows SRWLOCK is
+                // unfair — without yielding, the IO thread can re-acquire the
+                // mutex before the renderer thread, starving rendering during
+                // heavy terminal output (e.g. mpv --vo=tct). Yield 1ms every
+                // 8ms to allow ~120 FPS rendering with ~12% IO overhead.
+                if (t2) |t2v| {
+                    const should_yield = if (perf_last_yield) |ly|
+                        t2v.since(ly) >= 8 * std.time.ns_per_ms
+                    else
+                        true;
+                    if (should_yield) {
+                        perf_last_yield = t2v;
+                        std.Thread.sleep(1 * std.time.ns_per_ms);
+                    }
+                }
+
+                // Accumulate perf counters
+                if (t0) |t0v| {
+                    if (t1) |t1v| {
+                        if (t2) |t2v| {
+                            perf_read_ns += t1v.since(t0v);
+                            perf_process_ns += t2v.since(t1v);
+                        }
+                    }
+                }
+                perf_bytes += n;
+                perf_reads += 1;
+
+                // Report throughput every second
+                if (perf_last) |last| {
+                    const now = std.time.Instant.now() catch null;
+                    if (now) |now_v| {
+                        const elapsed_ns = now_v.since(last);
+                        if (elapsed_ns >= std.time.ns_per_s) {
+                            const elapsed_f: f64 = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(std.time.ns_per_s));
+                            const mbps = @as(f64, @floatFromInt(perf_bytes)) / elapsed_f / (1024.0 * 1024.0);
+                            const avg_read: u64 = if (perf_reads > 0) perf_bytes / perf_reads else 0;
+                            const total_ns = perf_read_ns + perf_process_ns;
+                            const read_pct: f64 = if (total_ns > 0)
+                                @as(f64, @floatFromInt(perf_read_ns)) * 100.0 / @as(f64, @floatFromInt(total_ns))
+                            else
+                                0.0;
+
+                            log.info("PERF: {d:.2} MB/s | avg_read={d}B | reads={d} | pipe={d:.0}% process={d:.0}%", .{
+                                mbps,
+                                avg_read,
+                                perf_reads,
+                                read_pct,
+                                100.0 - read_pct,
+                            });
+
+                            perf_bytes = 0;
+                            perf_reads = 0;
+                            perf_read_ns = 0;
+                            perf_process_ns = 0;
+                            perf_last = now_v;
+                        }
+                    }
+                }
             }
 
             var quit_bytes: windows.DWORD = 0;
@@ -1569,7 +1679,23 @@ fn execCommand(
                     try args.append(alloc, "/K");
                     break :shell try args.toOwnedSlice(alloc);
                 } else if (is_wsl) {
-                    try args.append(alloc, v);
+                    // Resolve to full path — wsl.exe lives in System32
+                    // and CreateProcessW with direct pipes needs the full path.
+                    const v_str = std.mem.sliceTo(v, 0);
+                    const wsl_path = if (std.mem.indexOf(u8, v_str, "\\") == null and
+                        std.mem.indexOf(u8, v_str, "/") == null)
+                    blk: {
+                        const windir = std.process.getEnvVarOwned(alloc, "WINDIR") catch "C:\\WINDOWS";
+                        break :blk try std.fs.path.joinZ(alloc, &.{ windir, "System32", "wsl.exe" });
+                    } else v;
+                    try args.append(alloc, wsl_path);
+                    // Use script(1) to create a real Linux PTY inside WSL.
+                    // This lets us bypass ConPTY (direct pipes) while still
+                    // giving the shell a proper terminal.
+                    try args.append(alloc, "--");
+                    try args.append(alloc, "script");
+                    try args.append(alloc, "-qf");
+                    try args.append(alloc, "/dev/null");
                     break :shell try args.toOwnedSlice(alloc);
                 }
 

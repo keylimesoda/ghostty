@@ -107,6 +107,10 @@ flags: packed struct {
     /// This is true when the view is focused. This defaults to true
     /// and it is up to the apprt to set the correct value.
     focused: bool = true,
+
+    /// Set to true after the first successful updateFrame from wakeupCallback.
+    /// Used on Windows to guard the draw timer's updateFrame call.
+    render_ready: bool = false,
 } = .{},
 
 pub const DerivedConfig = struct {
@@ -294,6 +298,11 @@ fn setQosClass(self: *const Thread) void {
 
 fn syncDrawTimer(self: *Thread) void {
     skip: {
+        // On Windows, always run the draw timer to ensure consistent rendering.
+        // The xev Async wakeup mechanism via IOCP is unreliable on Windows,
+        // so we use a polling timer instead of event-driven rendering.
+        if (comptime builtin.os.tag == .windows) break :skip;
+
         // If our renderer supports animations and has them, then we
         // can apply draw timer based on custom shader animation configuration.
         if (@hasDecl(rendererpkg.Renderer, "hasAnimations") and
@@ -500,10 +509,39 @@ fn drawFrame(self: *Thread, now: bool) void {
     if (!now and self.renderer.hasVsync()) return;
 
     if (must_draw_from_app_thread) {
-        _ = self.app_mailbox.push(
+        const pushed = self.app_mailbox.push(
             .{ .redraw_surface = self.surface },
             .{ .instant = {} },
         );
+        // Diagnostic: track mailbox push rate and drops
+        {
+            const S = struct {
+                var push_ok: u64 = 0;
+                var push_drop: u64 = 0;
+                var last_log: ?std.time.Instant = null;
+            };
+            if (pushed > 0) {
+                S.push_ok += 1;
+            } else {
+                S.push_drop += 1;
+            }
+            if (std.time.Instant.now()) |now_t| {
+                const should_log = if (S.last_log) |last|
+                    now_t.since(last) >= 5 * std.time.ns_per_s
+                else
+                    true;
+                if (should_log) {
+                    const rate = if (S.last_log) |last|
+                        (S.push_ok + S.push_drop) * std.time.ns_per_s / now_t.since(last)
+                    else
+                        0;
+                    log.warn("[mailbox_push] ok={} drop={} rate={}/s", .{ S.push_ok, S.push_drop, rate });
+                    S.push_ok = 0;
+                    S.push_drop = 0;
+                    S.last_log = now_t;
+                }
+            } else |_| {}
+        }
     } else {
         self.renderer.drawFrame(false) catch |err|
             log.warn("error drawing err={}", .{err});
@@ -523,6 +561,30 @@ fn wakeupCallback(
 
     const t = self_.?;
 
+    // Diagnostic counter for renderer thread wakeups
+    {
+        const S = struct {
+            var count: u64 = 0;
+            var last_log: ?std.time.Instant = null;
+        };
+        S.count += 1;
+        if (std.time.Instant.now()) |now| {
+            const should_log = if (S.last_log) |last|
+                now.since(last) >= 5 * std.time.ns_per_s
+            else
+                true;
+            if (should_log) {
+                const rate = if (S.last_log) |last|
+                    S.count * std.time.ns_per_s / now.since(last)
+                else
+                    0;
+                log.warn("[renderer_wakeup] count={} rate={}/s", .{ S.count, rate });
+                S.count = 0;
+                S.last_log = now;
+            }
+        } else |_| {}
+    }
+
     // When we wake up, we check the mailbox. Mailbox producers should
     // wake up our thread after publishing.
     t.drainMailbox() catch |err|
@@ -531,22 +593,8 @@ fn wakeupCallback(
     // Render immediately
     _ = renderCallback(t, undefined, undefined, {});
 
-    // The below is not used anymore but if we ever want to introduce
-    // a configuration to introduce a delay to coalesce renders, we can
-    // use this.
-    //
-    // // If the timer is already active then we don't have to do anything.
-    // if (t.render_c.state() == .active) return .rearm;
-    //
-    // // Timer is not active, let's start it
-    // t.render_h.run(
-    //     &t.loop,
-    //     &t.render_c,
-    //     10,
-    //     Thread,
-    //     t,
-    //     renderCallback,
-    // );
+    // Mark renderer as ready after first successful render
+    t.flags.render_ready = true;
 
     return .rearm;
 }
@@ -581,6 +629,21 @@ fn drawCallback(
         log.warn("render callback fired without data set", .{});
         return .disarm;
     };
+
+    // On Windows, the draw timer is our primary render driver (the xev
+    // Async wakeup via IOCP is unreliable). Update frame data here so
+    // each timer tick picks up the latest terminal state.
+    // Only do this after the renderer has completed its first successful
+    // render (render_ready) to avoid accessing uninitialized state.
+    if (comptime builtin.os.tag == .windows) {
+        if (t.flags.render_ready) {
+            t.renderer.updateFrame(
+                t.state,
+                t.flags.cursor_blink_visible,
+            ) catch |err|
+                log.warn("error updating frame in draw timer err={}", .{err});
+        }
+    }
 
     // Draw
     t.drawFrame(false);
